@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+message ble_device {
+    message ble_uuid {
+        enum ble_uuid_length {
+            UUID16 = 0;
+            UUID32 = 1;
+            UUID128 = 2;
+        }
+
+        ble_uuid_length length = 1;
+        oneof uuid {
+            uint32 uuid_short = 2;
+            bytes uuid_long = 3;
+        }
+    }
+
+    // The sensor's unique ID
+    uint32 sensor_id = 100;
+
+    // Were we able to interrogate this device?
+    bool interrogated = 101;
+
+    // Is this device connectable 
+    bool connectable = 102;
+
+    // How many tries to interrogate
+    uint32 interrogations = 103;
+
+    // Advertising response length
+    uint32 adv_rsp_len = 104;
+
+    // Scan response length
+    uint32 scan_rsp_len = 105;
+
+    // The device's bluetooth device address
+    bytes bda_address = 127;
+
+    // Received advertising data
+    bytes adv_data = 128;
+
+    // Metadata for a GATT service
+    message ble_gatt_service {
+        ble_uuid service_uuid = 500;
+
+        // Metadata for an attribute exposed by a GATT service
+        message ble_gatt_attr {
+            // The service UUID
+            ble_uuid attr_uuid = 600;
+
+            // The data read back from this attribute
+            bytes data = 601;
+        }
+
+        // Array of GATT attributes associated with this device
+        repeated ble_gatt_attr gatt_attrs = 501;
+    };
+
+    // The list of services exposed by this device
+    repeated ble_gatt_service services = 200;
+}
