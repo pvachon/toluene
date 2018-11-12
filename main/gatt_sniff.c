@@ -83,7 +83,7 @@ void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
         break;
 
     case ESP_GATTC_CONNECT_EVT: {
-        ESP_LOGI(TAG, "ESP_GATTC_CONNECT_EVT conn_id %d, if %d", p_data->connect.conn_id, gattc_if);
+        //ESP_LOGI(TAG, "ESP_GATTC_CONNECT_EVT conn_id %d, if %d", p_data->connect.conn_id, gattc_if);
         active.conn_id = p_data->connect.conn_id;
         memcpy(active.remote_bda, p_data->connect.remote_bda, sizeof(esp_bd_addr_t));
         esp_err_t mtu_ret = esp_ble_gattc_send_mtu_req (gattc_if, p_data->connect.conn_id);
@@ -95,7 +95,7 @@ void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
     }
 
     case ESP_GATTC_OPEN_EVT:
-        ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT");
+        //ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT");
         if (param->open.status != ESP_GATT_OK){
             ESP_LOGE(TAG, "open failed, status %d", p_data->open.status);
             esp_ble_gattc_close(gattc_if, p_data->open.conn_id);
@@ -108,15 +108,15 @@ void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
             ESP_LOGE(TAG,"config mtu failed, error status = %x", param->cfg_mtu.status);
             esp_ble_gattc_close(gattc_if, p_data->cfg_mtu.conn_id);
         }
-        ESP_LOGI(TAG, "ESP_GATTC_CFG_MTU_EVT, Status %d, MTU %d, conn_id %d", param->cfg_mtu.status, param->cfg_mtu.mtu, param->cfg_mtu.conn_id);
+        //ESP_LOGI(TAG, "ESP_GATTC_CFG_MTU_EVT, Status %d, MTU %d, conn_id %d", param->cfg_mtu.status, param->cfg_mtu.mtu, param->cfg_mtu.conn_id);
         if (device_on_open(dev, gattc_if, p_data->cfg_mtu.conn_id)) {
             esp_ble_gattc_close(gattc_if, p_data->cfg_mtu.conn_id);
         }
         break;
 
     case ESP_GATTC_SEARCH_RES_EVT: {
-        ESP_LOGI(TAG, "SEARCH RES: conn_id = %x is primary service %d", p_data->search_res.conn_id, p_data->search_res.is_primary);
-        ESP_LOGI(TAG, "start handle %d end handle %d current handle value %d", p_data->search_res.start_handle, p_data->search_res.end_handle, p_data->search_res.srvc_id.inst_id);
+        //ESP_LOGI(TAG, "SEARCH RES: conn_id = %x is primary service %d", p_data->search_res.conn_id, p_data->search_res.is_primary);
+        //ESP_LOGI(TAG, "start handle %d end handle %d current handle value %d", p_data->search_res.start_handle, p_data->search_res.end_handle, p_data->search_res.srvc_id.inst_id);
         if (device_on_found_service(dev, &p_data->search_res.srvc_id.uuid, p_data->search_res.start_handle, p_data->search_res.end_handle)) {
             ESP_LOGI(TAG, "Did not find services, aborting.");
             esp_ble_gattc_close(gattc_if, p_data->search_res.conn_id);

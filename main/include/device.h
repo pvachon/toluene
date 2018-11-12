@@ -22,6 +22,8 @@ struct device_tracker {
     unsigned nr_devices;
 };
 
+struct ble_object;
+
 struct device {
     bool connectable;
     bool interrogated;
@@ -37,8 +39,9 @@ struct device {
     uint8_t adv_data_len;
     uint8_t is_public;
     uint8_t raw[ESP_BLE_ADV_DATA_LEN_MAX + ESP_BLE_SCAN_RSP_DATA_LEN_MAX];
-    uint8_t name[64];
-    uint8_t name_len;
+    struct ble_object *obj;
+    uint8_t *encoded_obj;
+    size_t encoded_obj_len;
 };
 
 #define DEV_RBTREE(x)   RB_CONTAINER_OF((x), struct device, r_node)

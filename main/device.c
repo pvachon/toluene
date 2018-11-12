@@ -11,6 +11,8 @@
 #include "esp_bt_main.h"
 #include "esp_gatt_common_api.h"
 
+#include "encoder.h"
+
 #include <string.h>
 
 #define TAG                 "DEVICE"
@@ -30,11 +32,12 @@
 
 #define INVALID_HANDLE                                  0xffff
 
-struct ble_service {
+struct ble_service_info {
     uint16_t service_id;
     uint16_t nr_attributes;
     uint16_t handle_lo;
     uint16_t handle_hi;
+    struct ble_service *svc;
     uint16_t *attributes;
 };
 
@@ -58,7 +61,7 @@ uint16_t _device_info_access_attrs[] = {
 #define BLE_ARRAY_LEN(x)    (sizeof((x))/sizeof((x)[0]))
 
 static
-struct ble_service services[] = {
+struct ble_service_info services[] = {
     {
         .service_id = BLE_SERVICE_GENERIC_ACCESS,
         .attributes = _generic_access_attrs,
@@ -89,8 +92,6 @@ int device_on_open(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id)
 {
     int ret = 1;
 
-    ESP_LOGI(TAG, "Device is open");
-
     if (dev->state != DEVICE_NOT_CONNECTED) {
         ESP_LOGE(TAG, "Unknown device state at open time, aborting");
         goto done;
@@ -103,6 +104,13 @@ int device_on_open(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id)
     for (size_t i = 0; i < BLE_ARRAY_LEN(services); i++) {
         services[i].handle_hi = INVALID_HANDLE;
         services[i].handle_lo = INVALID_HANDLE;
+        services[i].svc = NULL;
+    }
+
+    /* Create the object */
+    if (ble_object_new(&dev->obj, 24601, dev->connectable, dev->mac_addr, dev->raw, dev->adv_data_len, dev->scan_rsp_len)) {
+        ESP_LOGE(TAG, "Failed to create BLE object, aborting.");
+        goto done;
     }
 
     ret = 0;
@@ -115,7 +123,14 @@ int device_on_found_service(struct device *dev, esp_bt_uuid_t const *service_uui
 {
     int ret = 1;
 
+    struct ble_service *svc = NULL;
+
+    if (ble_object_add_service(dev->obj, &svc, service_uuid)) {
+        ESP_LOGE(TAG, "Failed to add service record; proceeding with caution.");
+    }
+
     if (service_uuid->len != ESP_UUID_LEN_16) {
+        /* TODO: we should pack this into the device information region */
         ESP_LOGI(TAG, "UUID is not 16-bits long");
         /* Strictly speaking, this is not an error */
         ret = 0;
@@ -128,6 +143,7 @@ int device_on_found_service(struct device *dev, esp_bt_uuid_t const *service_uui
         if (services[i].service_id == service_uuid->uuid.uuid16) {
             services[i].handle_lo = start_hdl;
             services[i].handle_hi = end_hdl;
+            services[i].svc = svc;
         }
     }
 
@@ -140,7 +156,7 @@ done:
  * Send a request to read a single GATT attribute.
  */
 static
-int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, struct ble_service const *svc)
+int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, struct ble_service_info const *svc)
 {
     int ret = 1;
 
@@ -175,7 +191,7 @@ int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, uint
         goto done;
     }
 
-    ESP_LOGI(TAG, "Requested read for handle %04x", char_elem.char_handle);
+    //ESP_LOGI(TAG, "Requested read for handle %04x", char_elem.char_handle);
 
     ret = 0;
 done:
@@ -189,7 +205,7 @@ static
 int _device_next_attrib(struct device *dev)
 {
     int ret = 1;
-    struct ble_service const *svc = &services[dev->service_id];
+    struct ble_service_info const *svc = &services[dev->service_id];
 
     if (++dev->attr_id == svc->nr_attributes) {
         dev->service_id++;
@@ -223,7 +239,7 @@ int device_on_search_finished(struct device *dev, esp_gatt_if_t gattc_if, uint16
 
     /* Kick off the first attribute lookup */
     for (size_t i = 0; i < BLE_ARRAY_LEN(services); i++) {
-        struct ble_service *sv = &services[i];
+        struct ble_service_info *sv = &services[i];
 
         if (sv->handle_hi != INVALID_HANDLE && sv->handle_lo != INVALID_HANDLE) {
             dev->service_id = i;
@@ -253,6 +269,14 @@ int device_on_disconnect(struct device *dev, unsigned reason)
 
     ESP_LOGI(TAG, "Device disconnected (reason: %u)", reason);
 
+    if (NULL != dev->obj) {
+        if (ble_object_serialize(dev->obj, &dev->encoded_obj, &dev->encoded_obj_len)) {
+            ESP_LOGE(TAG, "Failed to serialize information about this device, aborting.");
+        }
+    }
+
+    ble_object_delete(&dev->obj);
+
     return ret;
 }
 
@@ -260,8 +284,23 @@ int device_on_read_characteristic(struct device *dev, esp_gatt_if_t gattc_if, ui
 {
     int ret = 1;
 
+    struct ble_service_info *svi = NULL;
+
     ESP_LOGI(TAG, "Read %zu bytes from handle %u", data_len, handle);
     ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_INFO);
+
+    svi = &services[dev->service_id];
+    /* Add a BLE attribute to the service, if available */
+    esp_bt_uuid_t attr_uuid = {
+        .len = ESP_UUID_LEN_16,
+        .uuid = {
+            .uuid16 = svi->attributes[dev->attr_id],
+        },
+    };
+
+    if (ble_service_add_attribute(svi->svc, &attr_uuid, data, data_len)) {
+        ESP_LOGE(TAG, "Failed to log the fact that we just read an attribute.");
+    }
 
     if (_device_next_attrib(dev)) {
         goto done;
