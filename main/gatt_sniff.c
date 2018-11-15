@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "device.h"
+#include "uploader.h"
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -293,9 +294,8 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
         case ESP_GAP_SEARCH_INQ_RES_EVT: {
             struct device *dev = NULL;
             uint8_t *bda = scan_result->scan_rst.bda;
+            /* TODO: need to cope with advertising data changing over time */
             if (device_tracker_find(&tracker, &dev, scan_result->scan_rst.bda)) {
-                dev = device_new(bda);
-
                 ESP_LOGI(TAG, "%02x:%02x:%02x-%02x:%02x:%02x -> addr_type: %s (%d) evt_type: %d searchee Adv Data Len %d, Scan Response Len %d",
                         bda[0], bda[1], bda[2], bda[3], bda[4], bda[5],
                         scan_result->scan_rst.ble_addr_type == BLE_ADDR_TYPE_PUBLIC ? "public" : "private",
@@ -319,25 +319,21 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
                     esp_log_buffer_char(TAG, adv_short_name, adv_short_name_len);
                 }
 
-                dev->is_public = scan_result->scan_rst.ble_addr_type == BLE_ADDR_TYPE_PUBLIC;
-                dev->scan_rsp_len = scan_result->scan_rst.scan_rsp_len;
-                dev->adv_data_len = scan_result->scan_rst.adv_data_len;
-                dev->nr_interrogations = 0;
-                dev->connectable = scan_result->scan_rst.ble_evt_type == ESP_BLE_EVT_CONN_ADV;
-                dev->interrogated = false;
-
-                memcpy(dev->raw, scan_result->scan_rst.ble_adv, dev->scan_rsp_len + dev->adv_data_len);
+                dev = device_new(bda, scan_result->scan_rst.ble_addr_type == BLE_ADDR_TYPE_PUBLIC,
+                        scan_result->scan_rst.ble_evt_type == ESP_BLE_EVT_CONN_ADV,
+                        scan_result->scan_rst.adv_data_len,
+                        scan_result->scan_rst.scan_rsp_len,
+                        scan_result->scan_rst.ble_adv);
 
                 if (device_tracker_insert(&tracker, dev)) {
                     ESP_LOGE(TAG, "Failed to insert device, aieeee!");
                 }
-            } else {
-                if (dev->adv_data_len != scan_result->scan_rst.adv_data_len) {
-#if 0
-                    esp_log_buffer_hex(TAG, scan_result->scan_rst.bda, 6);
-                    ESP_LOGE(TAG, "Adv data len changed (was %u, now %u)", (unsigned)dev->adv_data_len, (unsigned)scan_result->scan_rst.adv_data_len);
-                    ESP_LOGI(TAG, "\n");
-#endif
+
+                if (false == dev->connectable) {
+                    /* Finalize this device as well */
+                    if (device_on_disconnect(dev, 0)) {
+                        ESP_LOGE(TAG, "Failed to finalize unconnectable device, aborting.");
+                    }
                 }
             }
 
@@ -429,6 +425,8 @@ void app_main()
     ESP_ERROR_CHECK(ret);
 
     device_tracker_init(&tracker);
+
+    uploader_init();
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 

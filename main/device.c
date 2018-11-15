@@ -107,12 +107,6 @@ int device_on_open(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id)
         services[i].svc = NULL;
     }
 
-    /* Create the object */
-    if (ble_object_new(&dev->obj, 24601, dev->connectable, dev->mac_addr, dev->raw, dev->adv_data_len, dev->scan_rsp_len)) {
-        ESP_LOGE(TAG, "Failed to create BLE object, aborting.");
-        goto done;
-    }
-
     ret = 0;
 
 done:
@@ -272,11 +266,14 @@ int device_on_disconnect(struct device *dev, unsigned reason)
     if (NULL != dev->obj) {
         if (ble_object_serialize(dev->obj, &dev->encoded_obj, &dev->encoded_obj_len)) {
             ESP_LOGE(TAG, "Failed to serialize information about this device, aborting.");
+            goto done;
         }
     }
 
     ble_object_delete(&dev->obj);
 
+    ret = 0;
+done:
     return ret;
 }
 
@@ -324,14 +321,12 @@ int device_tracker_insert(struct device_tracker *trk, struct device *dev)
 {
     int ret = 1;
 
-    dev->crc = _hash_mac(dev->mac_addr);
-
     if (RB_OK != rb_tree_insert(&trk->devices, (void *)dev->crc, &dev->r_node)) {
-        const uint8_t *mac = dev->mac_addr;
-        ESP_LOGE(TAG, "MAC address %02x:%02x:%02x-%02x:%02x:%02x could not be inserted!",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        ESP_LOGE(TAG, "Failed to insert device. Likely duplicate BDA.");
         goto done;
     }
+
+    list_append(&trk->device_list, &dev->d_node);
 
     trk->nr_devices++;
 
@@ -372,7 +367,7 @@ void device_tracker_init(struct device_tracker *trk)
     list_init(&trk->device_list);
 }
 
-struct device *device_new(uint8_t const * mac)
+struct device *device_new(uint8_t const * mac, bool is_public, bool connectable, size_t adv_data_len, size_t scan_rsp_len, uint8_t const * adv_data)
 {
     struct device *ndev = calloc(1, sizeof(struct device));
 
@@ -380,7 +375,19 @@ struct device *device_new(uint8_t const * mac)
         ESP_LOGE(TAG, "Failed to allocate device node, aborting");
         goto done;
     }
-    memcpy(ndev->mac_addr, mac, DEVICE_MAC_ADDR_LEN);
+    ndev->connectable = connectable;
+    ndev->is_public = is_public;
+
+    ndev->interrogated = false;
+    ndev->nr_interrogations = 0;
+
+    ndev->crc = _hash_mac(mac);
+
+    /* Create the object */
+    if (ble_object_new(&ndev->obj, 24601, ndev->connectable, mac, adv_data, adv_data_len, scan_rsp_len)) {
+        ESP_LOGE(TAG, "Failed to create BLE object, aborting.");
+        goto done;
+    }
 
 done:
     return ndev;
