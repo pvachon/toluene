@@ -45,6 +45,9 @@ xTaskHandle _uploader_task_hdl;
 
 #define CONFIG_TARGET_HOST                  "51.15.228.192"
 
+#define CONFIG_ESSID                        ""
+#define CONIFG_WPA2_PSK_PASSWORD            "russians"
+
 static
 esp_err_t _uploader_wifi_evt_handler(void *ctx, system_event_t *event)
 {
@@ -115,6 +118,7 @@ void _uploader_task(void *p)
             if (conn_fd != -1) {
                 ESP_LOGW(TAG, "We already have a valid file descriptor, closing it.");
                 close(conn_fd);
+                conn_fd = -1;
             }
         } else if (bits & STATUS_BIT_WIFI_DISCONNECT) {
             /* We've been instructed to stop posting results */
