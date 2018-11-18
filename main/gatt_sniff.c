@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "device.h"
+#include "control.h"
 #include "uploader.h"
 
 #include "nvs.h"
@@ -20,27 +21,13 @@
 #include "freertos/FreeRTOS.h"
 
 #define TAG                         "HUFFER"
-
 /* Declare static functions */
 static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param);
 static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param);
 
 static
-struct device_tracker tracker;
-
-static
 bool connecting = false;
-
-static
-esp_ble_scan_params_t ble_scan_params = {
-    .scan_type              = BLE_SCAN_TYPE_ACTIVE,
-    .own_addr_type          = BLE_ADDR_TYPE_PUBLIC,
-    .scan_filter_policy     = BLE_SCAN_FILTER_ALLOW_ALL,
-    .scan_interval          = 0x50,
-    .scan_window            = 0x30,
-    .scan_duplicate         = BLE_SCAN_DUPLICATE_DISABLE
-};
 
 struct gattc_profile_inst {
     esp_gattc_cb_t gattc_cb;
@@ -62,15 +49,6 @@ struct gattc_profile_inst active = {
     .gattc_cb = gattc_profile_event_handler,
     .gattc_if = ESP_GATT_IF_NONE,       /* Not get the gatt_if, so initial is ESP_GATT_IF_NONE */
 };
-
-static
-void start_scan(void)
-{
-    esp_err_t scan_ret = esp_ble_gap_set_scan_params(&ble_scan_params);
-    if (scan_ret){
-        ESP_LOGE(TAG, "set scan params error, error code = %x", scan_ret);
-    }
-}
 
 static
 void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param)
@@ -258,7 +236,7 @@ void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
         connecting = false;
         device_on_disconnect(dev, p_data->disconnect.reason);
         //ESP_LOGI(TAG, "ESP_GATTC_DISCONNECT_EVT, reason = %d", p_data->disconnect.reason);
-        start_scan();
+        control_task_signal_ble_gatt_disconnect();
         break;
     default:
         break;
@@ -286,6 +264,7 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
             ESP_LOGE(TAG, "scan start failed, error status = %x", param->scan_start_cmpl.status);
             break;
         }
+        control_task_signal_ble_scan_started();
         break;
 
     case ESP_GAP_BLE_SCAN_RESULT_EVT: {
@@ -358,8 +337,8 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
             break;
         }
         case ESP_GAP_SEARCH_INQ_CMPL_EVT:
-            ESP_LOGI(TAG, "ALL DONE! Restarting for now, since we don't have upload capabilities. I found %u devices", tracker.nr_devices);
-            start_scan();
+            ESP_LOGI(TAG, "ALL DONE! Signaling control thread. I found %zu devices (%zu bytes)", device_tracker_nr_devs(NULL), device_tracker_nr_bytes_used(NULL));
+            control_task_signal_ble_scan_complete();
             break;
         default:
             break;
@@ -372,7 +351,8 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
             ESP_LOGE(TAG, "scan stop failed, error status = %x", param->scan_stop_cmpl.status);
             break;
         }
-        ESP_LOGI(TAG, "Scan Stopped (have found %u devices)", tracker.nr_devices);
+        control_task_signal_ble_scan_paused();
+        ESP_LOGI(TAG, "Scan Stopped (have found %zu devices, using %zu bytes of memory)", device_tracker_nr_devs(NULL), device_tracker_nr_bytes_used(NULL));
         break;
 
     case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
@@ -427,6 +407,7 @@ void app_main()
     device_tracker_init(&tracker);
 
     uploader_init();
+    control_task_init();
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
@@ -479,7 +460,7 @@ void app_main()
         ESP_LOGE(TAG, "set local  MTU failed, error code = %x", local_mtu_ret);
     }
 
-    start_scan();
+    control_task_signal_ble_ready();
 
     ESP_LOGI(TAG, "We are on the air!");
 }

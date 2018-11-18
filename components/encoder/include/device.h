@@ -16,13 +16,8 @@ enum device_interrogation_state {
     DEVICE_INTERROGATION_DONE,
 };
 
-struct device_tracker {
-    struct rb_tree devices;
-    struct list_entry device_list;
-    unsigned nr_devices;
-};
-
 struct ble_object;
+struct device_tracker;
 
 struct device {
     struct list_entry d_node;
@@ -44,6 +39,12 @@ struct device {
 #define DEV_LIST(x)     BL_CONTAINER_OF((x), struct device, d_node)
 
 #define DEV_MAX_INTERROGATIONS          10
+
+extern
+struct device_tracker tracker;
+
+size_t device_tracker_nr_devs(struct device_tracker *trk);
+size_t device_tracker_nr_bytes_used(struct device_tracker *trk);
 
 struct device *device_new(uint8_t const * mac, bool is_public, bool connectable, size_t adv_data_len, size_t scan_rsp_len, uint8_t const * adv_data);
 void device_tracker_init(struct device_tracker *trk);

@@ -32,6 +32,15 @@
 
 #define INVALID_HANDLE                                  0xffff
 
+struct device_tracker {
+    struct rb_tree devices;
+    struct list_entry device_list;
+    unsigned nr_devices;
+    size_t mem_bytes_used;
+};
+
+struct device_tracker tracker;
+
 struct ble_service_info {
     uint16_t service_id;
     uint16_t nr_attributes;
@@ -73,6 +82,24 @@ struct ble_service_info services[] = {
         .nr_attributes = BLE_ARRAY_LEN(_device_info_access_attrs),
     },
 };
+
+size_t device_tracker_nr_devs(struct device_tracker *trk)
+{
+    if (NULL != trk) {
+        return trk->nr_devices;
+    } else {
+        return tracker.nr_devices;
+    }
+}
+
+size_t device_tracker_nr_bytes_used(struct device_tracker *trk)
+{
+    if (NULL != trk) {
+        return trk->mem_bytes_used;
+    } else {
+        return tracker.mem_bytes_used;
+    }
+}
 
 static
 int32_t _hash_mac(uint8_t const *mac)
@@ -268,6 +295,8 @@ int device_on_disconnect(struct device *dev, unsigned reason)
             ESP_LOGE(TAG, "Failed to serialize information about this device, aborting.");
             goto done;
         }
+
+        tracker.mem_bytes_used += dev->encoded_obj_len;
     }
 
     ble_object_delete(&dev->obj);
@@ -329,6 +358,7 @@ int device_tracker_insert(struct device_tracker *trk, struct device *dev)
     list_append(&trk->device_list, &dev->d_node);
 
     trk->nr_devices++;
+    trk->mem_bytes_used += sizeof(struct device);
 
     ret = 0;
 
@@ -365,6 +395,8 @@ void device_tracker_init(struct device_tracker *trk)
 {
     rb_tree_new(&trk->devices, _device_rb_tree_cmp);
     list_init(&trk->device_list);
+    trk->mem_bytes_used = 0;
+    trk->nr_devices = 0;
 }
 
 struct device *device_new(uint8_t const * mac, bool is_public, bool connectable, size_t adv_data_len, size_t scan_rsp_len, uint8_t const * adv_data)

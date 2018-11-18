@@ -1,7 +1,9 @@
 #include "uploader.h"
+#include "control.h"
 
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
+#include "lwip/apps/sntp.h"
 
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -12,6 +14,8 @@
 #include "freertos/event_groups.h"
 
 #include "nvs_flash.h"
+
+#include <string.h>
 
 #define TAG                                 "UPLOADER"
 
@@ -43,10 +47,11 @@ xTaskHandle _uploader_task_hdl;
  */
 #define STATUS_BIT_TERMINATE                (1 << 0)
 
-#define CONFIG_TARGET_HOST                  "51.15.228.192"
+#define CONFIG_TARGET_HOST                  "enraged.openbsd-hotties.org"
 
-#define CONFIG_ESSID                        ""
-#define CONIFG_WPA2_PSK_PASSWORD            "russians"
+#define CONFIG_ESSID                        "GL-MT300N-V2-269"
+#define CONFIG_WPA2_PSK_PASSWORD            "russians"
+#define CONFIG_SERVICE_PORT                 24601
 
 static
 esp_err_t _uploader_wifi_evt_handler(void *ctx, system_event_t *event)
@@ -54,14 +59,17 @@ esp_err_t _uploader_wifi_evt_handler(void *ctx, system_event_t *event)
     switch (event->event_id) {
     case SYSTEM_EVENT_STA_START:
         /* Actually initiate the connection to the stored AP */
-        ESP_LOGI(TAG, "Connecting to access point, please wait...");
+        ESP_LOGI(TAG, "UPLOADER: -> Connecting to access point, please wait...");
         esp_wifi_connect();
         break;
     case SYSTEM_EVENT_STA_GOT_IP:
         /* Once we have an IP address, wake up the uploader task */
+        ESP_LOGI(TAG, "UPLOADER: -> We have an IP address...");
+        control_task_signal_wifi_up();
         xEventGroupSetBits(_uploader_control, STATUS_BIT_WIFI_CONNECTED);
         break;
     case SYSTEM_EVENT_STA_DISCONNECTED:
+        ESP_LOGI(TAG, "UPLOADER: -> We have been disconnected, notifying our state machine");
         xEventGroupSetBits(_uploader_control, STATUS_BIT_WIFI_DISCONNECT);
         break;
     default:
@@ -83,7 +91,86 @@ int _uploader_resolve_host(char const *hostname, struct ip4_addr *tgt_addr)
         goto done;
     }
 
+    *tgt_addr = *(struct ip4_addr *)he->h_addr;
+
+    ret = 0;
 done:
+    return ret;
+}
+
+enum uploader_state {
+    UPLOADER_STATE_CONNECT_WIFI,
+    UPLOADER_STATE_WIFI_CONNECTED,
+    UPLOADER_STATE_SERVICE_CONNECTED,
+    UPLOADER_STATE_TERMINATION_REQUESTED,
+    UPLOADER_STATE_IDLE,
+};
+
+static
+enum uploader_state _uploader_state = UPLOADER_STATE_IDLE;
+
+static
+int _uploader_connect(struct ip4_addr addr, int *pfd)
+{
+    int ret = -1;
+
+    int fd = -1,
+        r = 0;
+    struct sockaddr_in sin;
+
+    if (NULL == pfd) {
+        ESP_LOGE(TAG, "Must specify a non-null pointer to receive the file descriptor");
+        abort();
+    }
+
+    *pfd = -1;
+
+    ESP_LOGI(TAG, IPSTR, IP2STR(&addr));
+
+    if (0 > (fd = socket(AF_INET, SOCK_STREAM, 0))) {
+        ESP_LOGE(TAG, "Failed to create socket, aborting.");
+        goto done;
+    }
+
+    memset(&sin, 0, sizeof(sin));
+
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = 0;
+    sin.sin_port = htons(CONFIG_SERVICE_PORT);
+    if (0 > (r = bind(fd, (struct sockaddr *)&sin, sizeof(sin)))) {
+        ESP_LOGE(TAG, "Failed to bind, reason %d, aborting", r);
+    }
+
+    ESP_LOGI(TAG, "Connecting...");
+
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = addr.addr;
+    sin.sin_port = htons(CONFIG_SERVICE_PORT);
+    if (0 > (r = connect(fd, (struct sockaddr *)&sin, sizeof(sin)))) {
+        int errnum = errno;
+        ESP_LOGE(TAG, "Failed to connect to specified service, reason %d (%s) aborting.", errnum, strerror(errnum));
+        goto done;
+    }
+
+    ESP_LOGI(TAG, "Connected!");
+
+    const char hello[] = "hello, friend!\r\n";
+
+    if (0 > write(fd, hello, sizeof(hello))) {
+        ESP_LOGE(TAG, "Failed to greet!");
+        goto done;
+    }
+
+    *pfd = fd;
+
+    ret = 0;
+done:
+    if (0 != ret) {
+        if (-1 != fd) {
+            close(fd);
+            fd = -1;
+        }
+    }
     return ret;
 }
 
@@ -119,6 +206,10 @@ void _uploader_task(void *p)
                 ESP_LOGW(TAG, "We already have a valid file descriptor, closing it.");
                 close(conn_fd);
                 conn_fd = -1;
+            }
+
+            if (_uploader_connect(addr, &conn_fd)) {
+                ESP_LOGE(TAG, "Failed to connect to uploader target, aborting.");
             }
         } else if (bits & STATUS_BIT_WIFI_DISCONNECT) {
             /* We've been instructed to stop posting results */
@@ -166,8 +257,8 @@ void uploader_init(void)
     /* TODO: read the wifi config from NVS */
     wifi_config_t wifi_cfg = {
         .sta = {
-            .ssid = "Something",
-            .password = "Something Else",
+            .ssid = CONFIG_ESSID,
+            .password = CONFIG_WPA2_PSK_PASSWORD,
         },
     };
 
@@ -186,14 +277,8 @@ void uploader_shutdown(void)
     ESP_ERROR_CHECK(esp_wifi_disconnect());
 }
 
-/**
- * Enqueue a device record to be uploaded. The uploader worker thread will
- * free this memory.
- */
-int uploader_enqueue_record(void *record, size_t length)
+void uploader_connect(void)
 {
-    int ret = -1;
-
-    return ret;
+    ESP_ERROR_CHECK(esp_wifi_start());
 }
 
