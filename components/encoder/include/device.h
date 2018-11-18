@@ -49,6 +49,7 @@ size_t device_tracker_nr_bytes_used(struct device_tracker *trk);
 struct device *device_new(uint8_t const * mac, bool is_public, bool connectable, size_t adv_data_len, size_t scan_rsp_len, uint8_t const * adv_data);
 void device_tracker_init(struct device_tracker *trk);
 int device_tracker_insert(struct device_tracker *trk, struct device *dev);
+int device_tracker_remove(struct device_tracker *trk, struct device *dev);
 int device_tracker_find(struct device_tracker *trk, struct device **pdev, uint8_t const *mac);
 
 int device_on_open(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id);
@@ -56,4 +57,11 @@ int device_on_found_service(struct device *dev, esp_bt_uuid_t const *service_uui
 int device_on_disconnect(struct device *dev, unsigned reason);
 int device_on_read_characteristic(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, void *data, size_t data_len, uint16_t handle);
 int device_on_search_finished(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id);
+
+struct device_tracker {
+    struct rb_tree devices;
+    struct list_entry device_list;
+    unsigned nr_devices;
+    size_t mem_bytes_used;
+};
 

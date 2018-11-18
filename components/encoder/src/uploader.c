@@ -1,5 +1,6 @@
 #include "uploader.h"
 #include "control.h"
+#include "device.h"
 
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
@@ -70,6 +71,7 @@ esp_err_t _uploader_wifi_evt_handler(void *ctx, system_event_t *event)
         break;
     case SYSTEM_EVENT_STA_DISCONNECTED:
         ESP_LOGI(TAG, "UPLOADER: -> We have been disconnected, notifying our state machine");
+        esp_wifi_disconnect();
         xEventGroupSetBits(_uploader_control, STATUS_BIT_WIFI_DISCONNECT);
         break;
     default:
@@ -175,6 +177,55 @@ done:
 }
 
 static
+int _uploader_deliver_device_info(int fd)
+{
+    int ret = -1;
+
+    struct device *dev = NULL,
+                  *dev_tmp = NULL;
+    size_t record_id = 0;
+
+    list_for_each_type_safe(dev, dev_tmp, &tracker.device_list, d_node) {
+        record_id++;
+        uint16_t len = dev->encoded_obj_len;
+        if (2 != write(fd, &len, 2)) {
+            int errnum = errno;
+            ESP_LOGE(TAG, "Failed to send device record header, aborting: %s (%d)", strerror(errnum), errnum);
+            goto done;
+        }
+
+        if (dev->encoded_obj_len != write(fd, dev->encoded_obj, dev->encoded_obj_len)) {
+            int errnum = errno;
+            ESP_LOGE(TAG, "Failed to send device record, aborting: %s (%d)", strerror(errnum), errnum);
+            goto done;
+        }
+
+        /* Remove the device record, free any deeply-used memory */
+        if (device_tracker_remove(&tracker, dev)) {
+            ESP_LOGE(TAG, "Unexpected failure while removing object, aborting.");
+            abort();
+        }
+
+        /* Free the device itself */
+        free(dev);
+        dev = NULL;
+        ESP_LOGI(TAG, "Sent device %zu to the backend", record_id);
+    }
+
+    ESP_LOGI(TAG, "Sent a total of %zu device records to backend", record_id);
+
+    ret = 0;
+done:
+    return ret;
+}
+
+static
+void _uploader_terminate(int fd)
+{
+    close(fd);
+}
+
+static
 void _uploader_task(void *p)
 {
     const TickType_t ticks_to_wait = 10000 / portTICK_PERIOD_MS;
@@ -210,9 +261,31 @@ void _uploader_task(void *p)
 
             if (_uploader_connect(addr, &conn_fd)) {
                 ESP_LOGE(TAG, "Failed to connect to uploader target, aborting.");
+                control_task_signal_wifi_failure();
+                esp_wifi_disconnect();
+                continue;
             }
+
+            if (_uploader_deliver_device_info(conn_fd)) {
+                ESP_LOGE(TAG, "Failed to deliver device information to backend, aborting.");
+                control_task_signal_wifi_failure();
+                continue;
+            }
+
+            _uploader_terminate(conn_fd);
+            conn_fd = -1;
+            esp_wifi_disconnect();
+            control_task_signal_wifi_done();
         } else if (bits & STATUS_BIT_WIFI_DISCONNECT) {
             /* We've been instructed to stop posting results */
+            ESP_LOGI(TAG, "Wifi connection terminated, ensuring we clean up LwIP resources");
+            if (-1 != conn_fd) {
+                _uploader_terminate(conn_fd);
+                conn_fd = -1;
+            }
+            uploader_shutdown();
+            control_task_signal_wifi_down();
+
         } else if (bits & STATUS_BIT_TERMINATE) {
             /* We've been instructed to shut down */
         } else {
@@ -268,13 +341,10 @@ void uploader_init(void)
     _uploader_create_task();
 }
 
-/**
- * Shut down the uploader. Terminates the worker thread, cleans up the wifi functionality
- */
 void uploader_shutdown(void)
 {
-    ESP_LOGI(TAG, "Shutting down the wireless interface, for good.");
-    ESP_ERROR_CHECK(esp_wifi_disconnect());
+    ESP_LOGI(TAG, "Shutting down the wireless interface.");
+    ESP_ERROR_CHECK(esp_wifi_stop());
 }
 
 void uploader_connect(void)

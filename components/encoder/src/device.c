@@ -32,13 +32,6 @@
 
 #define INVALID_HANDLE                                  0xffff
 
-struct device_tracker {
-    struct rb_tree devices;
-    struct list_entry device_list;
-    unsigned nr_devices;
-    size_t mem_bytes_used;
-};
-
 struct device_tracker tracker;
 
 struct ble_service_info {
@@ -423,5 +416,28 @@ struct device *device_new(uint8_t const * mac, bool is_public, bool connectable,
 
 done:
     return ndev;
+}
+
+int device_tracker_remove(struct device_tracker *trk, struct device *dev)
+{
+    int ret = -1;
+
+    if (RB_OK != rb_tree_remove(&trk->devices, &dev->r_node)) {
+        ESP_LOGE(TAG, "Failed to remove object from tree, aborting");
+        goto done;
+    }
+
+    list_del(&dev->d_node);
+
+    trk->nr_devices--;
+    trk->mem_bytes_used -= dev->encoded_obj_len + sizeof(struct device);
+
+    free(dev->encoded_obj);
+    dev->encoded_obj = NULL;
+    dev->encoded_obj_len = 0;
+
+    ret = 0;
+done:
+    return ret;
 }
 

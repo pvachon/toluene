@@ -57,11 +57,11 @@ struct list_entry {
 /** \brief Initialize a static list item
  * Initialize a static list item to an empty state in .data
  */
-#define LIST_INIT(item) { .prev = &(item), .next = &(item) }
+//#define LIST_INIT(item) { .prev = &(item), .next = &(item) }
 
 /** \brief Declare a new list head
  */
-#define LIST_HEAD(name) struct list_entry name = LIST_INIT(name)
+//#define LIST_HEAD(name) struct list_entry name = LIST_INIT(name)
 
 /** \brief Get containing structure pointer
  * Extract a pointer to the structure that contains the given pointer.
@@ -87,12 +87,12 @@ struct list_entry {
 /**
  * Get the next item from a list
  */
-#define LIST_NEXT(list_ptr) ((list_ptr)->next)
+//#define LIST_NEXT(list_ptr) ((list_ptr)->next)
 
 /**
  * Get the previous item from a list
  */
-#define LIST_PREV(list_ptr) ((list_ptr)->prev)
+//#define LIST_PREV(list_ptr) ((list_ptr)->prev)
 
 /**
  * Get the next item of the list as the given type. MUST check if list is empty before using.
