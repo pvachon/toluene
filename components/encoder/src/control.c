@@ -98,6 +98,11 @@ void _control_task_thread(void *p)
         abort();
     }
 
+    /* TODO: need to make this more robust. This is so we trigger the SNTP initial
+     * time retrieval.
+     */
+    _control_state = CONTROL_STATE_SHUTTING_DOWN_BLE_SCAN;
+
     do {
         EventBits_t bits = xEventGroupWaitBits(_control_task_events,
                 CONTROL_TASK_STATUS_BLE_STARTED |

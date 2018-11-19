@@ -17,8 +17,12 @@
 #include "nvs_flash.h"
 
 #include <string.h>
+#include <time.h>
+#include <sys/time.h>
 
-#define TAG                                 "UPLOADER"
+#define TAG                                     "UPLOADER"
+#define CONFIG_MAX_SNTP_RETRIES                 20
+#define CONFIG_SNTP_REFRESH_COUNT               10
 
 /**
  * Event group to control the uploader task
@@ -55,6 +59,55 @@ xTaskHandle _uploader_task_hdl;
 #define CONFIG_SERVICE_PORT                 24601
 
 static
+bool _uploader_set_time_initial = false;
+
+static
+void _sntp_set_system_time(void)
+{
+    time_t now = 0;
+    struct tm timeinfo = { 0 };
+    bool time_set = false;
+
+    ESP_LOGI(TAG, "Initializing SNTP");
+
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_init();
+
+    ESP_LOGI(TAG, "Setting system time...");
+    for (int i = 0; i < CONFIG_MAX_SNTP_RETRIES; i++) {
+        ESP_LOGI(TAG, "Setting system time... (%d/%d)", i, CONFIG_MAX_SNTP_RETRIES);
+        time(&now);
+        localtime_r(&now, &timeinfo);
+
+        /* Check if we have a sensible year */
+        if (timeinfo.tm_year >= (2018 - 1900)) {
+            time_set = true;
+            break;
+        }
+
+        /* Sleep for a bit to let sntp do its thing */
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+
+    if (false == time_set) {
+        ESP_LOGE(TAG, "Failed to set system time, aborting.");
+        abort();
+    }
+
+    ESP_LOGI(TAG, "It is %04d-%02d-%02d at %02d:%02d:%02d",
+            timeinfo.tm_year + 1900,
+            timeinfo.tm_mon + 1,
+            timeinfo.tm_mday,
+            timeinfo.tm_hour,
+            timeinfo.tm_min,
+            timeinfo.tm_sec);
+}
+
+static
+unsigned _wifi_up_count = 0;
+
+static
 esp_err_t _uploader_wifi_evt_handler(void *ctx, system_event_t *event)
 {
     switch (event->event_id) {
@@ -66,6 +119,15 @@ esp_err_t _uploader_wifi_evt_handler(void *ctx, system_event_t *event)
     case SYSTEM_EVENT_STA_GOT_IP:
         /* Once we have an IP address, wake up the uploader task */
         ESP_LOGI(TAG, "UPLOADER: -> We have an IP address...");
+
+        if (false == _uploader_set_time_initial || _wifi_up_count % CONFIG_SNTP_REFRESH_COUNT == 0) {
+            ESP_LOGI(TAG, "We are setting the system time using SNTP, please wait");
+            _sntp_set_system_time();
+            _uploader_set_time_initial = true;
+        }
+
+        _wifi_up_count++;
+
         control_task_signal_wifi_up();
         xEventGroupSetBits(_uploader_control, STATUS_BIT_WIFI_CONNECTED);
         break;

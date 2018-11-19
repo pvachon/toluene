@@ -10,7 +10,7 @@
 
 #include <string.h>
 
-#define TAG         "ENCODER"
+#define TAG							"ENCODER"
 
 struct ble_object {
     BleDevice dev;
@@ -45,8 +45,6 @@ struct ble_service_attribute {
     /** The raw data read back from the service */
     uint8_t data[];
 };
-
-#define MEM_ALIGN       (1 << 4)
 
 static
 void *proto_malloc(size_t len)
@@ -94,7 +92,7 @@ void _ble_obj_encode_uuid(esp_bt_uuid_t const *esp_uuid, uint8_t *long_mem, BleD
     }
 }
 
-int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectable, uint8_t const *bda_addr, void const *adv_data, uint32_t adv_len, uint32_t scan_rsp_len)
+int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectable, uint8_t const *bda_addr, void const *adv_data, uint32_t adv_len, uint32_t scan_rsp_len, int64_t timestamp)
 {
     int ret = -1;
 
@@ -137,6 +135,9 @@ int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectabl
             obj->dev.scan_rsp_len = scan_rsp_len;
         }
     }
+
+    obj->dev.has_timestamp = 1;
+    obj->dev.timestamp = timestamp;
 
     /* Mark if this object was connectable */
     obj->dev.has_connectable = 1;

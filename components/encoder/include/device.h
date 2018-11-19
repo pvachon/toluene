@@ -24,6 +24,7 @@ struct device {
     struct rb_tree_node r_node;
     enum device_interrogation_state state;
     uint32_t crc;
+    int64_t time_us;
     bool connectable;
     bool interrogated;
     uint8_t nr_interrogations;

@@ -15,6 +15,9 @@ message ble_device {
         }
     }
 
+    // The timestamp at which this message was seen, in microseconds since the epoch.
+    int64 timestamp = 10;
+
     // The sensor's unique ID
     uint32 sensor_id = 100;
 
