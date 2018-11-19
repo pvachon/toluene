@@ -21,6 +21,9 @@
 #include "freertos/FreeRTOS.h"
 
 #define TAG                         "HUFFER"
+
+#define CONFIG_BLE_SCAN_DURATION    300
+
 /* Declare static functions */
 static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 static void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param);
@@ -253,9 +256,8 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 
     switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT: {
-        //the unit of the duration is second
-        uint32_t duration = 30;
-        esp_ble_gap_start_scanning(duration);
+        /* Signal that we want to scan for 300 seconds */
+        esp_ble_gap_start_scanning(CONFIG_BLE_SCAN_DURATION);
         break;
     }
     case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:

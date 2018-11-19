@@ -87,7 +87,7 @@ void _control_task_thread(void *p)
 {
     const TickType_t ticks_to_wait = 10000 / portTICK_PERIOD_MS;
 
-#define CONTROL_TIMER_INTERVAL      (15 * 1000 * 1000)
+#define CONTROL_TIMER_INTERVAL      (300ull * 1000ull * 1000ull)
 
     size_t nr_backoffs = 0;
 

@@ -136,12 +136,14 @@ int _uploader_connect(struct ip4_addr addr, int *pfd)
 
     memset(&sin, 0, sizeof(sin));
 
+    /*
     sin.sin_family = AF_INET;
     sin.sin_addr.s_addr = 0;
     sin.sin_port = htons(CONFIG_SERVICE_PORT);
     if (0 > (r = bind(fd, (struct sockaddr *)&sin, sizeof(sin)))) {
         ESP_LOGE(TAG, "Failed to bind, reason %d, aborting", r);
     }
+    */
 
     ESP_LOGI(TAG, "Connecting...");
 
@@ -155,13 +157,6 @@ int _uploader_connect(struct ip4_addr addr, int *pfd)
     }
 
     ESP_LOGI(TAG, "Connected!");
-
-    const char hello[] = "hello, friend!\r\n";
-
-    if (0 > write(fd, hello, sizeof(hello))) {
-        ESP_LOGE(TAG, "Failed to greet!");
-        goto done;
-    }
 
     *pfd = fd;
 
@@ -274,6 +269,9 @@ void _uploader_task(void *p)
 
             _uploader_terminate(conn_fd);
             conn_fd = -1;
+            /* FIXME: Delay for 100ms so we can ensure our FIN gets sent */
+            vTaskDelay(100/portTICK_PERIOD_MS);
+            tcpip_adapter_stop(TCPIP_ADAPTER_IF_ETH);
             esp_wifi_disconnect();
             control_task_signal_wifi_done();
         } else if (bits & STATUS_BIT_WIFI_DISCONNECT) {
