@@ -226,11 +226,16 @@ int ble_service_add_attribute(struct ble_service *svc, esp_bt_uuid_t const *uuid
     _ble_obj_encode_uuid(uuid, attr->uuid_long, &attr->uuid);
     attr->attr.attr_uuid = &attr->uuid;
 
-    /* Feed me data (or a dead cat) */
-    memcpy(attr->data, data, real_data_len);
-    attr->attr.has_data = 1;
-    attr->attr.data.data = attr->data;
-    attr->attr.data.len = data_len;
+    if (0 != data_len) {
+        /* Feed me data (or a dead cat) */
+        memcpy(attr->data, data, real_data_len);
+        attr->attr.has_data = 1;
+        attr->attr.data.data = attr->data;
+        attr->attr.data.len = data_len;
+    } else {
+        attr->attr.has_data = 0;
+        attr->attr.data.len = 0;
+    }
 
     /* Track the attribute for when serialization happens */
     svc->nr_attribs++;

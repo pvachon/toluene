@@ -134,25 +134,49 @@ done:
     return ret;
 }
 
-int device_on_found_service(struct device *dev, esp_bt_uuid_t const *service_uuid, uint16_t start_hdl, uint16_t end_hdl)
+int device_on_found_service(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, esp_bt_uuid_t const *service_uuid, uint16_t start_hdl, uint16_t end_hdl)
 {
     int ret = 1;
 
     struct ble_service *svc = NULL;
+    esp_gattc_char_elem_t *chars = NULL;
 
     if (ble_object_add_service(dev->obj, &svc, service_uuid)) {
         ESP_LOGE(TAG, "Failed to add service record; proceeding with caution.");
     }
 
     if (service_uuid->len != ESP_UUID_LEN_16) {
-        /* TODO: we should pack this into the device information region */
-        ESP_LOGI(TAG, "UUID is not 16-bits long");
-        /* Strictly speaking, this is not an error */
+        uint16_t count = 0;
+        if (ESP_GATT_OK != esp_ble_gattc_get_attr_count(gattc_if, conn_id, ESP_GATT_DB_CHARACTERISTIC, start_hdl, end_hdl, INVALID_HANDLE, &count)) {
+            ESP_LOGE(TAG, "Failed to get service attribute count, aborting");
+            ret = 0;
+            goto done;
+        }
+
+        if (0 != count) {
+            if (NULL == (chars = malloc(count * sizeof(*chars)))) {
+                ESP_LOGE(TAG, "Failed to allocate memory for %u attributes", (unsigned)count);
+                ret = 0;
+                goto done;
+            }
+
+            if (ESP_GATT_OK != esp_ble_gattc_get_all_char(gattc_if, conn_id, start_hdl, end_hdl, chars, &count, 0)) {
+                ESP_LOGE(TAG, "Failed to get characteristics for this service, aborting.");
+                ret = 0;
+                goto done;
+            }
+
+            for (size_t i = 0; i < count; i++) {
+                if (ble_service_add_attribute(svc, &chars[i].uuid, NULL, 0)) {
+                    ESP_LOGE(TAG, "Failed to add descriptor to service, skipping");
+                    continue;
+                }
+            }
+        }
+
         ret = 0;
         goto done;
     }
-
-    ESP_LOGI(TAG, "UUID16: %x", service_uuid->uuid.uuid16);
 
     for (size_t i = 0; i < BLE_ARRAY_LEN(services); i++) {
         if (services[i].service_id == service_uuid->uuid.uuid16) {
@@ -164,6 +188,9 @@ int device_on_found_service(struct device *dev, esp_bt_uuid_t const *service_uui
 
     ret = 0;
 done:
+    if (NULL != chars) {
+        free(chars);
+    }
     return ret;
 }
 
@@ -191,7 +218,7 @@ int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, uint
                                                               uuid, &char_elem,
                                                               &count);
     if (status != ESP_GATT_OK) {
-        ESP_LOGE(TAG, "Failed to get characteristic handle: %04x", svc->attributes[dev->attr_id]);
+        ESP_LOGW(TAG, "Failed to get characteristic handle: %04x", svc->attributes[dev->attr_id]);
         goto done;
     }
 

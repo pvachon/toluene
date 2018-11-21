@@ -54,7 +54,7 @@ int device_tracker_remove(struct device_tracker *trk, struct device *dev);
 int device_tracker_find(struct device_tracker *trk, struct device **pdev, uint8_t const *mac);
 
 int device_on_open(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id);
-int device_on_found_service(struct device *dev, esp_bt_uuid_t const *service_uuid, uint16_t start_hdl, uint16_t end_hdl);
+int device_on_found_service(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, esp_bt_uuid_t const *service_uuid, uint16_t start_hdl, uint16_t end_hdl);
 int device_on_disconnect(struct device *dev, unsigned reason);
 int device_on_read_characteristic(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, void *data, size_t data_len, uint16_t handle);
 int device_on_search_finished(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id);

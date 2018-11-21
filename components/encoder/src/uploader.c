@@ -102,6 +102,9 @@ void _sntp_set_system_time(void)
             timeinfo.tm_hour,
             timeinfo.tm_min,
             timeinfo.tm_sec);
+
+    /* We don't need to keep sntp running in the background */
+    sntp_stop();
 }
 
 static

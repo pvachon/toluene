@@ -99,7 +99,7 @@ void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
     case ESP_GATTC_SEARCH_RES_EVT: {
         //ESP_LOGI(TAG, "SEARCH RES: conn_id = %x is primary service %d", p_data->search_res.conn_id, p_data->search_res.is_primary);
         //ESP_LOGI(TAG, "start handle %d end handle %d current handle value %d", p_data->search_res.start_handle, p_data->search_res.end_handle, p_data->search_res.srvc_id.inst_id);
-        if (device_on_found_service(dev, &p_data->search_res.srvc_id.uuid, p_data->search_res.start_handle, p_data->search_res.end_handle)) {
+        if (device_on_found_service(dev, gattc_if, p_data->open.conn_id, &p_data->search_res.srvc_id.uuid, p_data->search_res.start_handle, p_data->search_res.end_handle)) {
             ESP_LOGI(TAG, "Did not find services, aborting.");
             esp_ble_gattc_close(gattc_if, p_data->search_res.conn_id);
         }
