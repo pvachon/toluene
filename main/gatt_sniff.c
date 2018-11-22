@@ -79,7 +79,7 @@ void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
     case ESP_GATTC_OPEN_EVT:
         //ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT");
         if (param->open.status != ESP_GATT_OK){
-            ESP_LOGE(TAG, "open failed, status %d", p_data->open.status);
+            ESP_LOGI(TAG, "open failed, status %d", p_data->open.status);
             esp_ble_gattc_close(gattc_if, p_data->open.conn_id);
             break;
         }
@@ -249,11 +249,6 @@ void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
 static
 void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
-    uint8_t *adv_name = NULL,
-            *adv_short_name = NULL;
-    uint8_t adv_name_len = 0,
-            adv_short_name_len = 0;
-
     switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT: {
         /* Signal that we want to scan for 300 seconds */
@@ -283,22 +278,6 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
                         scan_result->scan_rst.ble_addr_type,
                         scan_result->scan_rst.ble_evt_type,
                         scan_result->scan_rst.adv_data_len, scan_result->scan_rst.scan_rsp_len);
-
-                /* Check for the long name */
-                adv_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv,
-                                                    ESP_BLE_AD_TYPE_NAME_CMPL, &adv_name_len);
-                if (0 != adv_name_len) {
-                    ESP_LOGI(TAG, "searched Device Name Len %d", adv_name_len);
-                    esp_log_buffer_char(TAG, adv_name, adv_name_len);
-                }
-
-                /* Check for the short name */
-                adv_short_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv,
-                                                          ESP_BLE_AD_TYPE_NAME_SHORT, &adv_short_name_len);
-                if (0 != adv_short_name_len) {
-                    ESP_LOGI(TAG, "Short name len: %d", adv_short_name_len);
-                    esp_log_buffer_char(TAG, adv_short_name, adv_short_name_len);
-                }
 
                 dev = device_new(bda, scan_result->scan_rst.ble_addr_type == BLE_ADDR_TYPE_PUBLIC,
                         scan_result->scan_rst.ble_evt_type == ESP_BLE_EVT_CONN_ADV,

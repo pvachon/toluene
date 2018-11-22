@@ -14,3 +14,5 @@ void control_task_signal_wifi_done(void);
 void control_task_signal_wifi_failure(void);
 void control_task_signal_wifi_down(void);
 
+void control_task_signal_ntp_done(void);
+

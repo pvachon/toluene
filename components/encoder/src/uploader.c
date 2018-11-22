@@ -105,6 +105,8 @@ void _sntp_set_system_time(void)
 
     /* We don't need to keep sntp running in the background */
     sntp_stop();
+
+    control_task_signal_ntp_done();
 }
 
 static
@@ -164,17 +166,6 @@ int _uploader_resolve_host(char const *hostname, struct ip4_addr *tgt_addr)
 done:
     return ret;
 }
-
-enum uploader_state {
-    UPLOADER_STATE_CONNECT_WIFI,
-    UPLOADER_STATE_WIFI_CONNECTED,
-    UPLOADER_STATE_SERVICE_CONNECTED,
-    UPLOADER_STATE_TERMINATION_REQUESTED,
-    UPLOADER_STATE_IDLE,
-};
-
-static
-enum uploader_state _uploader_state = UPLOADER_STATE_IDLE;
 
 static
 int _uploader_connect(struct ip4_addr addr, int *pfd)
@@ -282,6 +273,16 @@ done:
 static
 void _uploader_terminate(int fd)
 {
+    uint8_t v = 0;
+
+    ESP_LOGI(TAG, "Requesting shutdown");
+
+    lwip_shutdown(fd, SHUT_RDWR);
+
+    while (0 != read(fd, &v, 1));
+
+    ESP_LOGI(TAG, "Now closing the socket for real");
+
     close(fd);
 }
 
@@ -319,23 +320,23 @@ void _uploader_task(void *p)
                 conn_fd = -1;
             }
 
-            if (_uploader_connect(addr, &conn_fd)) {
-                ESP_LOGE(TAG, "Failed to connect to uploader target, aborting.");
-                control_task_signal_wifi_failure();
-                esp_wifi_disconnect();
-                continue;
-            }
+            if (0 != device_tracker_nr_devs(NULL)) {
+                if (_uploader_connect(addr, &conn_fd)) {
+                    ESP_LOGE(TAG, "Failed to connect to uploader target, aborting.");
+                    control_task_signal_wifi_failure();
+                    esp_wifi_disconnect();
+                    continue;
+                }
 
-            if (_uploader_deliver_device_info(conn_fd)) {
-                ESP_LOGE(TAG, "Failed to deliver device information to backend, aborting.");
-                control_task_signal_wifi_failure();
-                continue;
-            }
+                if (_uploader_deliver_device_info(conn_fd)) {
+                    ESP_LOGE(TAG, "Failed to deliver device information to backend, aborting.");
+                    control_task_signal_wifi_failure();
+                    continue;
+                }
 
-            _uploader_terminate(conn_fd);
-            conn_fd = -1;
-            /* FIXME: Delay for 100ms so we can ensure our FIN gets sent */
-            vTaskDelay(100/portTICK_PERIOD_MS);
+                _uploader_terminate(conn_fd);
+                conn_fd = -1;
+            }
             tcpip_adapter_stop(TCPIP_ADAPTER_IF_ETH);
             esp_wifi_disconnect();
             control_task_signal_wifi_done();

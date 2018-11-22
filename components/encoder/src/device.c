@@ -218,7 +218,7 @@ int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, uint
                                                               uuid, &char_elem,
                                                               &count);
     if (status != ESP_GATT_OK) {
-        ESP_LOGW(TAG, "Failed to get characteristic handle: %04x", svc->attributes[dev->attr_id]);
+        //ESP_LOGW(TAG, "Failed to get characteristic handle: %04x", svc->attributes[dev->attr_id]);
         goto done;
     }
 
