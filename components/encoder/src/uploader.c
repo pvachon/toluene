@@ -58,6 +58,12 @@ xTaskHandle _uploader_task_hdl;
 #define CONFIG_WPA2_PSK_PASSWORD            "russians"
 #define CONFIG_SERVICE_PORT                 24601
 
+struct connect_hello {
+    uint16_t magic;
+    uint16_t nr_records;
+    uint16_t device_id;
+} __attribute__((packed));
+
 static
 bool _uploader_set_time_initial = false;
 
@@ -192,15 +198,6 @@ int _uploader_connect(struct ip4_addr addr, int *pfd)
 
     memset(&sin, 0, sizeof(sin));
 
-    /*
-    sin.sin_family = AF_INET;
-    sin.sin_addr.s_addr = 0;
-    sin.sin_port = htons(CONFIG_SERVICE_PORT);
-    if (0 > (r = bind(fd, (struct sockaddr *)&sin, sizeof(sin)))) {
-        ESP_LOGE(TAG, "Failed to bind, reason %d, aborting", r);
-    }
-    */
-
     ESP_LOGI(TAG, "Connecting...");
 
     sin.sin_family = AF_INET;
@@ -234,11 +231,29 @@ int _uploader_deliver_device_info(int fd)
 
     struct device *dev = NULL,
                   *dev_tmp = NULL;
-    size_t record_id = 0;
+    size_t record_id = 0,
+           nr_records;
+
+    nr_records = device_tracker_nr_devs(NULL);
+
+    struct connect_hello helo = {
+        .magic = 0xDEAD,
+        .nr_records = nr_records,
+        .device_id = 24601,
+    };
+
+    if (6 != write(fd, &helo, sizeof(helo))) {
+        int errnum = errno;
+        ESP_LOGE(TAG, "Failed to send HELO: %s (%d)", strerror(errnum), errnum);
+        goto done;
+    }
 
     list_for_each_type_safe(dev, dev_tmp, &tracker.device_list, d_node) {
         record_id++;
         uint16_t len = dev->encoded_obj_len;
+
+        assert(0 != len);
+
         if (2 != write(fd, &len, 2)) {
             int errnum = errno;
             ESP_LOGE(TAG, "Failed to send device record header, aborting: %s (%d)", strerror(errnum), errnum);
@@ -257,10 +272,16 @@ int _uploader_deliver_device_info(int fd)
             abort();
         }
 
+        ESP_LOGI(TAG, "Sent device %zu to the backend (length = %u)", record_id, (unsigned)len);
+
         /* Free the device itself */
         free(dev);
         dev = NULL;
-        ESP_LOGI(TAG, "Sent device %zu to the backend", record_id);
+    }
+
+    if (!list_empty(&tracker.device_list)) {
+        ESP_LOGI(TAG, "The list is not empty");
+        abort();
     }
 
     ESP_LOGI(TAG, "Sent a total of %zu device records to backend", record_id);
@@ -273,17 +294,20 @@ done:
 static
 void _uploader_terminate(int fd)
 {
-    uint8_t v = 0;
+    uint16_t confirm = 0;
 
-    ESP_LOGI(TAG, "Requesting shutdown");
-
-    lwip_shutdown(fd, SHUT_RDWR);
-
-    while (0 != read(fd, &v, 1));
+    if (2 != read(fd, &confirm, sizeof(confirm))) {
+        ESP_LOGE(TAG, "End of stream while waiting for confirmation, aborting.");
+    }
 
     ESP_LOGI(TAG, "Now closing the socket for real");
 
-    close(fd);
+    lwip_shutdown(fd, SHUT_RDWR);
+
+    if (0 != close(fd)) {
+        int errnum = errno;
+        ESP_LOGE(TAG, "Failed to close (we probably didn't flush the queue successfully): %s (%d)", strerror(errnum), errnum);
+    }
 }
 
 static
@@ -320,7 +344,8 @@ void _uploader_task(void *p)
                 conn_fd = -1;
             }
 
-            if (0 != device_tracker_nr_devs(NULL)) {
+            size_t nr_devs = 0;
+            if (0 != (nr_devs = device_tracker_nr_devs(NULL))) {
                 if (_uploader_connect(addr, &conn_fd)) {
                     ESP_LOGE(TAG, "Failed to connect to uploader target, aborting.");
                     control_task_signal_wifi_failure();
@@ -337,7 +362,8 @@ void _uploader_task(void *p)
                 _uploader_terminate(conn_fd);
                 conn_fd = -1;
             }
-            tcpip_adapter_stop(TCPIP_ADAPTER_IF_ETH);
+
+            tcpip_adapter_stop(TCPIP_ADAPTER_IF_STA);
             esp_wifi_disconnect();
             control_task_signal_wifi_done();
         } else if (bits & STATUS_BIT_WIFI_DISCONNECT) {

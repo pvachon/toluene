@@ -217,7 +217,7 @@ void _control_task_thread(void *p)
                 ESP_LOGW(TAG, "======> STATUS: Failed to get NTP time, we will try again in 10 seconds.");
                 uploader_connect();
             } else {
-                ESP_LOGI(TAG, "===> STATUS: Wifi is now down, but something is awry");
+                ESP_LOGI(TAG, "===> STATUS: Wifi is now down, but something is awry (state = %d)", _control_state);
             }
         };
 

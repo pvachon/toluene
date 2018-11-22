@@ -316,8 +316,11 @@ int device_on_disconnect(struct device *dev, unsigned reason)
             ESP_LOGE(TAG, "Failed to serialize information about this device, aborting.");
             goto done;
         }
+        assert(dev->encoded_obj_len != 0);
 
         tracker.mem_bytes_used += dev->encoded_obj_len;
+    } else {
+        ESP_LOGE(TAG, "No device object exists for this entry, aborting.");
     }
 
     ble_object_delete(&dev->obj);
@@ -466,6 +469,11 @@ int device_tracker_remove(struct device_tracker *trk, struct device *dev)
     }
 
     list_del(&dev->d_node);
+
+    if (NULL != dev->obj) {
+        ESP_LOGE(TAG, "An unencoded BLE object was hanging around, cleaning it up.");
+        ble_object_delete(&dev->obj);
+    }
 
     trk->nr_devices--;
     trk->mem_bytes_used -= dev->encoded_obj_len + sizeof(struct device);

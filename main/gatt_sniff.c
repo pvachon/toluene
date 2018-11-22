@@ -270,6 +270,11 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
         case ESP_GAP_SEARCH_INQ_RES_EVT: {
             struct device *dev = NULL;
             uint8_t *bda = scan_result->scan_rst.bda;
+            if (active.dev_info) {
+                ESP_LOGW(TAG, "Device information arrived, but we are about to connect, skipping");
+                break;
+            }
+
             /* TODO: need to cope with advertising data changing over time */
             if (device_tracker_find(&tracker, &dev, scan_result->scan_rst.bda)) {
                 ESP_LOGI(TAG, "%02x:%02x:%02x-%02x:%02x:%02x -> addr_type: %s (%d) evt_type: %d searchee Adv Data Len %d, Scan Response Len %d",
@@ -297,9 +302,7 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
                 }
             }
 
-            if (NULL == dev) {
-                ESP_LOGE(TAG, "Device is NULL, incoming panic...");
-            }
+            assert(NULL != dev);
 
             if (false == connecting &&
                     true == dev->connectable &&
