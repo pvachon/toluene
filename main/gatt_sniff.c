@@ -87,8 +87,8 @@ void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
 
     case ESP_GATTC_CFG_MTU_EVT:
         if (param->cfg_mtu.status != ESP_GATT_OK){
-            ESP_LOGE(TAG,"config mtu failed, error status = %x", param->cfg_mtu.status);
-            esp_ble_gattc_close(gattc_if, p_data->cfg_mtu.conn_id);
+            ESP_LOGW(TAG,"Setting large MTU failed, status code:%x", param->cfg_mtu.status);
+            //esp_ble_gattc_close(gattc_if, p_data->cfg_mtu.conn_id);
         }
         //ESP_LOGI(TAG, "ESP_GATTC_CFG_MTU_EVT, Status %d, MTU %d, conn_id %d", param->cfg_mtu.status, param->cfg_mtu.mtu, param->cfg_mtu.conn_id);
         if (device_on_open(dev, gattc_if, p_data->cfg_mtu.conn_id)) {
