@@ -303,6 +303,7 @@ void _uploader_terminate(int fd)
     ESP_LOGI(TAG, "Now closing the socket for real");
 
     lwip_shutdown(fd, SHUT_RDWR);
+    vTaskDelay(200 / portTICK_PERIOD_MS);
 
     if (0 != close(fd)) {
         int errnum = errno;
