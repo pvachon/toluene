@@ -112,6 +112,10 @@ int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectabl
 
     obj->dev = (BleDevice)BLE_DEVICE__INIT;
 
+    /* Fill in the Sensor ID */
+    obj->dev.has_sensor_id = 1;
+    obj->dev.sensor_id = sensor_id;
+
     /* Fill in the Bluetooth Device Address */
     memcpy(obj->bda_addr, bda_addr, 6);
     obj->dev.bda_address.data = obj->bda_addr;
