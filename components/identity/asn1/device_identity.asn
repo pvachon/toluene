@@ -1,0 +1,45 @@
+DeviceIdentity DEFINITIONS ::=
+BEGIN
+
+-- ECC signature, based on X9.64, containing (r, s). The algorithm and the
+-- type of key are pre-negotiated based on the use case.
+Signature ::= SEQUENCE {
+    -- Signature r
+    r BIT STRING,
+    -- Signature s
+    s BIT STRING
+}
+
+-- Contains the actual device identity information that is to be used
+-- in managing and connecting to the target.
+DeviceIdentityInfo ::= SEQUENCE {
+    -- The ESSID we are to connect to
+    wifiESSID UTF8String,
+
+    -- The password for the network, supporting WPA2-PSK
+    wifiPassword UTF8String,
+
+    -- The target host IP address or hostname to connect to
+    targetHost UTF8String,
+
+    -- The target port, TCP connections using TLS
+    targetPort INTEGER,
+
+    -- Our unique device identifier
+    deviceId INTEGER,
+
+    -- The certificate the device is to use, based on the CSR exported during
+    -- provisioning. Once this certificate is loaded, no new CSRs can be requested
+    -- unless the certificate has expired.
+    identityCert BIT STRING
+}
+
+-- A signed bundle containing all the important identity information for this device
+DeviceIdentityBundle ::= SEQUENCE {
+    -- This device's identity info
+    identityInfo DeviceIdentityInfo,
+    -- Signature, from a trusted authority, for this device's identity information
+    identityInfoSignature Signature
+}
+
+END
