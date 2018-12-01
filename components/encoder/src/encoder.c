@@ -31,6 +31,12 @@ struct ble_service {
     /** Number of encoded attributes */
     size_t nr_attribs;
 
+    /** Start attribute handle */
+    uint16_t start_hdl;
+
+    /** End attribute handle */
+    uint16_t end_hdl;
+
     /** Array of attribute pointers */
     BleDevice__BleGattService__BleGattAttr **attr_ptrs;
 };
@@ -162,7 +168,7 @@ done:
     return ret;
 }
 
-int ble_object_add_service(struct ble_object *obj, struct ble_service **pservice, esp_bt_uuid_t const *uuid)
+int ble_object_add_service(struct ble_object *obj, struct ble_service **pservice, esp_bt_uuid_t const *uuid, uint16_t start_hdl, uint16_t end_hdl)
 {
     int ret = -1;
 
@@ -177,6 +183,8 @@ int ble_object_add_service(struct ble_object *obj, struct ble_service **pservice
 
     service->nr_attribs = 0;
     service->attr_ptrs = NULL;
+    service->start_hdl = start_hdl;
+    service->end_hdl = end_hdl;
 
     /* Encode the UUID for this service */
     _ble_obj_encode_uuid(uuid, service->uuid_long, &service->uuid);
@@ -204,6 +212,47 @@ done:
             service = NULL;
         }
     }
+    return ret;
+}
+
+int ble_object_get_service_count(struct ble_object *obj, size_t *pcnt)
+{
+    int ret = 1;
+
+    if (NULL == obj || NULL == pcnt) {
+        goto done;
+    }
+
+    *pcnt = obj->nr_services;
+
+    ret = 0;
+done:
+    return ret;
+}
+
+int ble_object_get_service_info(struct ble_object *obj, size_t svc_id, uint16_t *pstart_hdl, uint16_t *pend_hdl)
+{
+    int ret = -1;
+
+    struct ble_service *svc = NULL;
+
+    if (NULL == obj || NULL == pstart_hdl || NULL == pend_hdl) {
+        ESP_LOGE(TAG, "Programmer error: NULL pointer for output values in get_service_info");
+        goto done;
+    }
+
+    if (svc_id >= obj->nr_services) {
+        ESP_LOGE(TAG, "Service %zu does not exist (there are %zu services)", svc_id, obj->nr_services);
+        goto done;
+    }
+
+    svc = BL_CONTAINER_OF(obj->svc_ptrs[svc_id], struct ble_service, svc);
+
+    *pstart_hdl = svc->start_hdl;
+    *pend_hdl = svc->end_hdl;
+
+    ret = 0;
+done:
     return ret;
 }
 

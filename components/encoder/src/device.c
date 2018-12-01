@@ -16,7 +16,7 @@
 #include <string.h>
 #include <sys/time.h>
 
-#define TAG                 "DEVICE"
+#define TAG                                             "DEVICE"
 
 #define BLE_SERVICE_GENERIC_ACCESS                      0x1800
 #define BLE_SERVICE_GENERIC_ACCESS_ATTR_NAME            0x2a00
@@ -134,47 +134,93 @@ done:
     return ret;
 }
 
-int device_on_found_service(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, esp_bt_uuid_t const *service_uuid, uint16_t start_hdl, uint16_t end_hdl)
+static
+int _device_hoover_attribs(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, esp_bt_uuid_t const *service_uuid, uint16_t start_hdl, uint16_t end_hdl)
 {
     int ret = 1;
 
-    struct ble_service *svc = NULL;
-    esp_gattc_char_elem_t *chars = NULL;
+    uint16_t count = 0;
 
-    if (ble_object_add_service(dev->obj, &svc, service_uuid)) {
-        ESP_LOGE(TAG, "Failed to add service record; proceeding with caution.");
-    }
+    if (NULL == dev->cur_char) {
+        dev->cur_char = 0;
+        dev->nr_chars = 0;
 
-    if (service_uuid->len != ESP_UUID_LEN_16) {
-        uint16_t count = 0;
-        if (ESP_GATT_OK != esp_ble_gattc_get_attr_count(gattc_if, conn_id, ESP_GATT_DB_CHARACTERISTIC, start_hdl, end_hdl, INVALID_HANDLE, &count)) {
+        if (ESP_GATT_OK != esp_ble_gattc_get_attr_count(gattc_if, conn_id,
+                    ESP_GATT_DB_CHARACTERISTIC, start_hdl, end_hdl, INVALID_HANDLE, &count))
+        {
             ESP_LOGE(TAG, "Failed to get service attribute count, aborting");
             ret = 0;
             goto done;
         }
 
-        if (0 != count) {
-            if (NULL == (chars = malloc(count * sizeof(*chars)))) {
-                ESP_LOGE(TAG, "Failed to allocate memory for %u attributes", (unsigned)count);
-                ret = 0;
-                goto done;
-            }
-
-            if (ESP_GATT_OK != esp_ble_gattc_get_all_char(gattc_if, conn_id, start_hdl, end_hdl, chars, &count, 0)) {
-                ESP_LOGE(TAG, "Failed to get characteristics for this service, aborting.");
-                ret = 0;
-                goto done;
-            }
-
-            for (size_t i = 0; i < count; i++) {
-                if (ble_service_add_attribute(svc, &chars[i].uuid, NULL, 0)) {
-                    ESP_LOGE(TAG, "Failed to add descriptor to service, skipping");
-                    continue;
-                }
-            }
+        if (0 == count) {
+            ESP_LOGE(TAG, "There were no characteristics for this service, aborting");
+            ret = 0;
+            goto done;
         }
 
-        ret = 0;
+        if (NULL == (dev->chars = malloc(count * sizeof(*chars)))) {
+            ESP_LOGE(TAG, "Failed to allocate memory for %u attributes", (unsigned)count);
+            ret = 0;
+            goto done;
+        }
+
+        dev->nr_chars = count;
+
+        if (ESP_GATT_OK != esp_ble_gattc_get_all_char(gattc_if, conn_id, start_hdl, end_hdl, dev->chars, &count, 0)) {
+            ESP_LOGE(TAG, "Failed to get characteristics for this service, aborting.");
+            ret = 0;
+            goto done;
+        }
+    }
+
+    for (size_t i = i < dev->cur_char; i < dev->nr_chars; i++) {
+        /* Check if this is one we want to read */
+        esp_gattc_char_elem_t *charac = &dev->chars[i];
+
+        if (charac->uuid.len == ESP_UUID_LEN_16) {
+            if (_device_request_read_attrib(dev, gattc_if, conn_id, svc)) {
+                goto done;
+            }
+
+            /* We've enqueued the read, so let the event loop take over */
+            ret = 0;
+            goto done;
+        }
+
+        /* Otherwise, just grab the attribute infomration */
+        if (ble_service_add_attribute(svc, &dev->cur_chars[i].uuid, NULL, 0)) {
+            ESP_LOGE(TAG, "Failed to add descriptor to service, skipping");
+            continue;
+        }
+
+        dev->cur_char++;
+    }
+
+    if (dev->cur_char >= dev->nr_chars) {
+        free(dev->chars);
+        dev->chars = NULL;
+        dev->nr_chars = 0;
+        dev->cur_char = 0;
+        dev->cur_svc++;
+    }
+
+    ret = 0;
+done:
+    return ret;
+}
+
+int device_on_found_service(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, esp_bt_uuid_t const *service_uuid, uint16_t start_hdl, uint16_t end_hdl)
+{
+    int ret = 1;
+
+    struct ble_service *svc = NULL;
+
+    if (ble_object_add_service(dev->obj, &svc, service_uuid, start_hdl, end_hdl)) {
+        ESP_LOGE(TAG, "Failed to add service record; proceeding with caution.");
+    }
+
+    if (service_uuid->len != ESP_UUID_LEN_16) {
         goto done;
     }
 
@@ -188,9 +234,6 @@ int device_on_found_service(struct device *dev, esp_gatt_if_t gattc_if, uint16_t
 
     ret = 0;
 done:
-    if (NULL != chars) {
-        free(chars);
-    }
     return ret;
 }
 
@@ -198,73 +241,17 @@ done:
  * Send a request to read a single GATT attribute.
  */
 static
-int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, struct ble_service_info const *svc)
+int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, esp_gattc_char_elem_t const *elem, uint16_t conn_id, struct ble_service_info const *svc)
 {
     int ret = 1;
-
-    uint16_t count = 1;
-    esp_gattc_char_elem_t char_elem;
-
-    esp_bt_uuid_t uuid = {
-        .len = ESP_UUID_LEN_16,
-        .uuid = {
-            .uuid16 = svc->attributes[dev->attr_id],
-        },
-    };
-
-    /* Get the number of real attributes */
-    esp_gatt_status_t status = esp_ble_gattc_get_char_by_uuid(gattc_if, conn_id,
-                                                              svc->handle_lo, svc->handle_hi,
-                                                              uuid, &char_elem,
-                                                              &count);
-    if (status != ESP_GATT_OK) {
-        //ESP_LOGW(TAG, "Failed to get characteristic handle: %04x", svc->attributes[dev->attr_id]);
-        goto done;
-    }
-
-    if (0 == count) {
-        ESP_LOGE(TAG, "No attributes found (handles: 0x%04x-0x%04x) -- skipping", svc->handle_lo, svc->handle_hi);
-        goto done;
-    }
 
     /* Enqueue a read request for attribute */
-    if (ESP_GATT_OK != (status = esp_ble_gattc_read_char(gattc_if, conn_id, char_elem.char_handle, ESP_GATT_AUTH_REQ_NONE))) {
-        ESP_LOGE(TAG, "Failed to enqueue request for handle %04x for attribute %04x; aborting.", char_elem.char_handle, svc->attributes[dev->attr_id]);
+    if (ESP_GATT_OK != (status = esp_ble_gattc_read_char(gattc_if, conn_id, elem->char_handle, ESP_GATT_AUTH_REQ_NONE))) {
+        ESP_LOGE(TAG, "Failed to enqueue request for handle %04x for attribute %04x; aborting.", elem->char_handle, elem->uuid.uuid16);
         goto done;
     }
 
-    //ESP_LOGI(TAG, "Requested read for handle %04x", char_elem.char_handle);
-
-    ret = 0;
-done:
-    return ret;
-}
-
-/**
- * Walk the list of attributes we want to retrieve for this device.
- */
-static
-int _device_next_attrib(struct device *dev)
-{
-    int ret = 1;
-    struct ble_service_info const *svc = &services[dev->service_id];
-
-    if (++dev->attr_id == svc->nr_attributes) {
-        dev->service_id++;
-        for (size_t i = dev->service_id; i < BLE_ARRAY_LEN(services); i++) {
-            svc = &services[i];
-            dev->service_id = i;
-            if (svc->handle_lo != INVALID_HANDLE || svc->handle_hi != INVALID_HANDLE) {
-                dev->attr_id = 0;
-                break;
-            }
-        }
-    }
-
-    /* Check if we have no more services to check. If this is the case, end our misery */
-    if (dev->service_id >= BLE_ARRAY_LEN(services)) {
-        goto done;
-    }
+    ESP_LOGI(TAG, "Requested read for handle %04x", elem->uuid.uuid16);
 
     ret = 0;
 done:
@@ -275,24 +262,36 @@ int device_on_search_finished(struct device *dev, esp_gatt_if_t gattc_if, uint16
 {
     int ret = 1;
 
+    uint16_t start_hdl = 0,
+             end_hdl = 0;
+    esp_bt_uuid_t const *uuid = NULL;
+
     dev->state = DEVICE_FIND_SERVICES;
     dev->service_id = 0;
     dev->attr_id = 0;
+    dev->nr_chars = 0;
+    dev->cur_char = 0;
+    dev->nr_svcs = 0;
+    dev->chars = NULL;
 
-    /* Kick off the first attribute lookup */
-    for (size_t i = 0; i < BLE_ARRAY_LEN(services); i++) {
-        struct ble_service_info *sv = &services[i];
-
-        if (sv->handle_hi != INVALID_HANDLE && sv->handle_lo != INVALID_HANDLE) {
-            dev->service_id = i;
-            break;
-        }
+    if (ble_object_get_service_count(dev->obj, &dev->nr_svcs)) {
+        ESP_LOGE(TAG, "We have no services, we're all done.");
+        goto done;
     }
 
-    while (_device_request_read_attrib(dev, gattc_if, conn_id, &services[dev->service_id])) {
-        /* Failed to find the requested attribute, so bump to the next one */
-        if (_device_next_attrib(dev)) {
-            /* This device doesn't expose any interesting attributes */
+    if (0 == dev->nr_svcs) {
+        ESP_LOGE(TAG, "Device has no services, aborting.");
+        goto done;
+    }
+
+    for (size_t i = 0; i < dev->nr_svcs; i++) {
+        if (ble_object_get_service_info(dev->obj, 0, &uuid, &start_hdl, &end_hdl)) {
+            ESP_LOGE(TAG, "Failed to get service info, aborting.");
+            goto done;
+        }
+
+        if (_device_hoover_attribs(dev, gattc_if, conn_id, uuid, start_hdl, end_hdl)) {
+            ESP_LOGE(TAG, "Failed to start hoovering attributes, aborting.");
             goto done;
         }
     }
@@ -339,31 +338,24 @@ int device_on_read_characteristic(struct device *dev, esp_gatt_if_t gattc_if, ui
     ESP_LOGI(TAG, "Read %zu bytes from handle %u", data_len, handle);
     ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_INFO);
 
-    svi = &services[dev->service_id];
-    /* Add a BLE attribute to the service, if available */
-    esp_bt_uuid_t attr_uuid = {
-        .len = ESP_UUID_LEN_16,
-        .uuid = {
-            .uuid16 = svi->attributes[dev->attr_id],
-        },
-    };
-
-    if (ble_service_add_attribute(svi->svc, &attr_uuid, data, data_len)) {
+    /* Add the just-read attribute */
+    if (ble_service_add_attribute(svi->svc, &dev->chars[dev->cur_char], data, data_len)) {
         ESP_LOGE(TAG, "Failed to log the fact that we just read an attribute.");
     }
 
-    if (_device_next_attrib(dev)) {
-        goto done;
-    }
+    /* Resume iteration */
+    for (size_t i = dev->cur_svc; i < dev->nr_svcs; i++) {
+        if (ble_object_get_service_info(dev->obj, 0, &uuid, &start_hdl, &end_hdl)) {
+            ESP_LOGE(TAG, "Failed to get service info, aborting.");
+            goto done;
+        }
 
-    /* Try to enqueue a request to read the next attribute */
-    while (_device_request_read_attrib(dev, gattc_if, conn_id, &services[dev->service_id])) {
-        if (_device_next_attrib(dev)) {
-            /* This device doesn't expose any other interesting attributes */
-            ESP_LOGW(TAG, "No more interesting attributes, too bad; scheduling a disconnect");
+        if (_device_hoover_attribs(dev, gattc_if, conn_id, uuid, start_hdl, end_hdl)) {
+            ESP_LOGE(TAG, "Failed to start hoovering attributes, aborting.");
             goto done;
         }
     }
+
 
     ret = 0;
 done:
