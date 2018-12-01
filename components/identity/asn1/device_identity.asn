@@ -1,5 +1,8 @@
-DeviceIdentity DEFINITIONS ::=
+DeviceIdentity
+    { iso org(3) dod(6) internet(1) private(4) enterprise(1) twsided(46690) huffer(8) toluene(1) identity(1) }
+    DEFINITIONS AUTOMATIC TAGS ::=
 BEGIN
+
 
 -- ECC signature, based on X9.64, containing (r, s). The algorithm and the
 -- type of key are pre-negotiated based on the use case.
@@ -28,10 +31,10 @@ DeviceIdentityInfo ::= SEQUENCE {
     -- Our unique device identifier
     deviceId INTEGER,
 
-    -- The certificate the device is to use, based on the CSR exported during
-    -- provisioning. Once this certificate is loaded, no new CSRs can be requested
-    -- unless the certificate has expired.
-    identityCert BIT STRING
+    -- The identity certificate chain for this device. This is an array of certificates,
+    -- the first being the certificate representing the device, all the way up to the
+    -- root. The root must match one of the trusted roots for the device.
+    identityCertChain SEQUENCE OF BIT STRING
 }
 
 -- A signed bundle containing all the important identity information for this device

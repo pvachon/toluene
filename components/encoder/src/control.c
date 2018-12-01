@@ -1,6 +1,9 @@
 #include "esp_log.h"
 #include "esp_gap_ble_api.h"
 
+#include "nvs.h"
+#include "nvs_flash.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -263,6 +266,105 @@ void control_task_init(void)
 
     if (pdPASS != ret) {
         ESP_LOGE(TAG, "Failed to create uploader worker task (result=%d)", ret);
+    }
+}
+
+static
+void _control_config_init(nvs_handle *phdl)
+{
+    nvs_handle hdl = NULL;
+
+    assert(NULL != phdl);
+    *phdl = NULL;
+
+    if (ESP_OK != (err = nvs_open("huffer", NVS_READWRITE, &hdl))) {
+        ESP_LOGE(TAG, "Fatal error while opening NVS partition for read-write, aborting (%d)", err);
+        abort();
+    }
+
+    if (ESP_OK != (err = nvs_erase_all(hdl))) {
+        ESP_LOGE(TAG, "Fatal error while erasing NVS partition, aborting (%d)", err);
+        abort();
+    }
+
+    *phdl = hdl;
+}
+
+static
+const char *_control_config_keys_str[] = {
+    "wifiESSID",
+    "wifiPassword",
+    "targetHost",
+    "targetPort",
+};
+
+static
+const char *_control_config_keys_i32[] = {
+    "deviceId",
+}
+
+#define NR_KEYS(x)      (sizeof((x))/sizeof((x)[0]))
+
+static
+bool __control_config_check_keys(nvs_handle hdl)
+{
+    for (size_t i = 0; i < NR_KEYS(_control_config_keys_str); i++) {
+        const char *key = _control_config_keys_str[i];
+        char value[64];
+        size_t value_len = sizeof(value);
+        if (ESP_OK != nvs_get_str(hdl, key, value, &value_len)) {
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < NR_KEYS(_control_config_keys_i32); i++) {
+        const char *key = _control_config_keys_i32[i];
+        int32_t value;
+        if (ESP_OK != nvs_get_i32(hdl, key, &value)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static
+void _control_config_init_subsys(void)
+{
+    nvs_handle hdl = NULL;
+
+    if (ESP_OK == (err = nvs_open("huffer", NVS_READONLY, &hdl))) {
+        if (__control_config_check_keys(hdl)) {
+            goto done;
+        }
+        ESP_LOGI(TAG, "Keys are missing or corrupt");
+    }
+
+    ESP_LOGI(TAG, "Kicking off configuration mode");
+
+    /* Initialize the NVS namespace */
+    _control_config_init(&hdl);
+
+    /* Wait for 2 bytes on the console indicating the length of the blob */
+
+
+done:
+    ;
+}
+
+void control_check_config(void)
+{
+    /* Check for the required NVS keys */
+    nvs_handle hdl = NULL;
+    esp_err_t err;
+
+    ESP_LOGI(TAG, "Bringing up non-volatile storage");
+    _control_config_init_subsys();
+
+
+done:
+    if (NULL != hdl) {
+        nvs_close(hdl);
     }
 }
 

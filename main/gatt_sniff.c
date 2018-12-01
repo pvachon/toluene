@@ -444,6 +444,7 @@ void app_main()
         ESP_LOGE(TAG, "set local  MTU failed, error code = %x", local_mtu_ret);
     }
 
+    control_check_config();
     control_task_signal_ble_ready();
 
     ESP_LOGI(TAG, "We are on the air!");
