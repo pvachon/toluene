@@ -90,7 +90,8 @@ void _control_task_thread(void *p)
 {
     const TickType_t ticks_to_wait = 10000 / portTICK_PERIOD_MS;
 
-    size_t nr_backoffs = 0;
+    size_t nr_backoffs = 0,
+           ntp_failures = 0;
 
     ESP_LOGI(TAG, "---- Control task started ---");
 
@@ -116,7 +117,8 @@ void _control_task_thread(void *p)
                 CONTROL_TASK_STATUS_BLE_SCAN_START_REQUEST |
                 CONTROL_TASK_STATUS_WIFI_FAILURE |
                 CONTROL_TASK_STATUS_WIFI_DOWN |
-                CONTROL_TASK_STATUS_NTP_ACQUIRED,
+                CONTROL_TASK_STATUS_NTP_ACQUIRED
+                ,
                 pdTRUE,
                 pdFALSE,
                 ticks_to_wait);
@@ -197,7 +199,7 @@ void _control_task_thread(void *p)
             }
             nr_backoffs = 0;
             /* If we're waiting for NTP, don't adjust our state */
-            if (_control_state != CONTROL_STATE_WAIT_GET_NTP) {
+            if (_control_state == CONTROL_STATE_WIFI_CONNECTING) {
                 _control_state = CONTROL_STATE_WIFI_CONNECTED;
             }
         }
@@ -208,14 +210,23 @@ void _control_task_thread(void *p)
         }
 
         if (bits & CONTROL_TASK_STATUS_WIFI_DOWN) {
-            if (_control_state == CONTROL_STATE_WAIT_WIFI_DOWN) {
+            if (_control_state == CONTROL_STATE_WAIT_WIFI_DOWN ||
+                    _control_state == CONTROL_STATE_WIFI_CONNECTING)
+            {
                 ESP_LOGI(TAG, "===> STATUS: Got signal wifi is down");
                 _control_state = CONTROL_STATE_RUNNING_BLE_SCAN;
                 esp_timer_start_once(_control_timer, CONFIG_CONTROL_TIMER_INTERVAL);
                 start_scan();
             } else if (_control_state == CONTROL_STATE_WAIT_GET_NTP) {
-                ESP_LOGW(TAG, "======> STATUS: Failed to get NTP time, we will try again in 10 seconds.");
-                uploader_connect();
+                if (++ntp_failures <= 10) {
+                    ESP_LOGW(TAG, "======> STATUS: Failed to get NTP time, we will try again in 10 seconds.");
+                    uploader_connect();
+                } else {
+                    ESP_LOGW(TAG, "======> STATUS: Giving up on setting NTP time, I'm just going to start scanning.");
+                    _control_state = CONTROL_STATE_RUNNING_BLE_SCAN;
+                    esp_timer_start_once(_control_timer, CONFIG_CONTROL_TIMER_INTERVAL);
+                    start_scan();
+                }
             } else {
                 ESP_LOGI(TAG, "===> STATUS: Wifi is now down, but something is awry (state = %d)", _control_state);
             }

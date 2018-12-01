@@ -97,8 +97,20 @@ void _sntp_set_system_time(void)
     }
 
     if (false == time_set) {
-        ESP_LOGE(TAG, "Failed to set system time, aborting.");
-        abort();
+        struct timeval tv = {
+            .tv_sec = 1543578442,
+            .tv_usec = 0,
+        };
+
+        ESP_LOGE(TAG, "Failed to set system time, setting to default.");
+
+        if (0 > settimeofday(&tv, NULL)) {
+            ESP_LOGE(TAG, "Failed to set system time, at all. Aborting.");
+            abort();
+        }
+
+        time(&now);
+        localtime_r(&now, &timeinfo);
     }
 
     ESP_LOGI(TAG, "It is %04d-%02d-%02d at %02d:%02d:%02d",
