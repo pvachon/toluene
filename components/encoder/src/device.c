@@ -17,6 +17,7 @@
 #include <sys/time.h>
 
 #define TAG                                             "DEVICE"
+#define HOOVER                                          "HOOVER"
 
 #define BLE_SERVICE_GENERIC_ACCESS                      0x1800
 #define BLE_SERVICE_GENERIC_ACCESS_ATTR_NAME            0x2a00
@@ -34,48 +35,6 @@
 #define INVALID_HANDLE                                  0xffff
 
 struct device_tracker tracker;
-
-struct ble_service_info {
-    uint16_t service_id;
-    uint16_t nr_attributes;
-    uint16_t handle_lo;
-    uint16_t handle_hi;
-    struct ble_service *svc;
-    uint16_t *attributes;
-};
-
-static
-uint16_t _generic_access_attrs[] = {
-    BLE_SERVICE_GENERIC_ACCESS_ATTR_NAME,
-    BLE_SERVICE_GENERIC_ACCESS_ATTR_APPEARANCE,
-};
-
-static
-uint16_t _device_info_access_attrs[] = {
-    BLE_SERVICE_DEVICE_INFO_ATTR_MANUF_NAME,
-    BLE_SERVICE_DEVICE_INFO_ATTR_MODEL_NUMBER,
-    BLE_SERVICE_DEVICE_INFO_ATTR_SERIAL_NUMBER,
-    BLE_SERVICE_DEVICE_INFO_ATTR_FIRMWARE_REV,
-    BLE_SERVICE_DEVICE_INFO_ATTR_SOFTWARE_REV,
-    BLE_SERVICE_DEVICE_INFO_ATTR_SYSTEM_ID,
-    BLE_SERVICE_DEVICE_INFO_ATTR_PNP_ID,
-};
-
-#define BLE_ARRAY_LEN(x)    (sizeof((x))/sizeof((x)[0]))
-
-static
-struct ble_service_info services[] = {
-    {
-        .service_id = BLE_SERVICE_GENERIC_ACCESS,
-        .attributes = _generic_access_attrs,
-        .nr_attributes = BLE_ARRAY_LEN(_generic_access_attrs),
-    },
-    {
-        .service_id = BLE_SERVICE_DEVICE_INFO,
-        .attributes = _device_info_access_attrs,
-        .nr_attributes = BLE_ARRAY_LEN(_device_info_access_attrs),
-    },
-};
 
 size_t device_tracker_nr_devs(struct device_tracker *trk)
 {
@@ -122,64 +81,127 @@ int device_on_open(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id)
     esp_ble_gattc_search_service(gattc_if, conn_id, NULL);
     dev->state = DEVICE_SEARCH_SERVICE;
 
-    for (size_t i = 0; i < BLE_ARRAY_LEN(services); i++) {
-        services[i].handle_hi = INVALID_HANDLE;
-        services[i].handle_lo = INVALID_HANDLE;
-        services[i].svc = NULL;
-    }
-
     ret = 0;
 
 done:
     return ret;
 }
 
+/**
+ * Send a request to read a single GATT attribute.
+ */
 static
-int _device_hoover_attribs(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, esp_bt_uuid_t const *service_uuid, uint16_t start_hdl, uint16_t end_hdl)
+int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, esp_gattc_char_elem_t const *elem)
 {
     int ret = 1;
 
-    uint16_t count = 0;
+    int status = ESP_GATT_OK;
 
-    if (NULL == dev->cur_char) {
-        dev->cur_char = 0;
-        dev->nr_chars = 0;
-
-        if (ESP_GATT_OK != esp_ble_gattc_get_attr_count(gattc_if, conn_id,
-                    ESP_GATT_DB_CHARACTERISTIC, start_hdl, end_hdl, INVALID_HANDLE, &count))
-        {
-            ESP_LOGE(TAG, "Failed to get service attribute count, aborting");
-            ret = 0;
-            goto done;
-        }
-
-        if (0 == count) {
-            ESP_LOGE(TAG, "There were no characteristics for this service, aborting");
-            ret = 0;
-            goto done;
-        }
-
-        if (NULL == (dev->chars = malloc(count * sizeof(*chars)))) {
-            ESP_LOGE(TAG, "Failed to allocate memory for %u attributes", (unsigned)count);
-            ret = 0;
-            goto done;
-        }
-
-        dev->nr_chars = count;
-
-        if (ESP_GATT_OK != esp_ble_gattc_get_all_char(gattc_if, conn_id, start_hdl, end_hdl, dev->chars, &count, 0)) {
-            ESP_LOGE(TAG, "Failed to get characteristics for this service, aborting.");
-            ret = 0;
-            goto done;
-        }
+    /* Enqueue a read request for attribute */
+    if (ESP_GATT_OK != (status = esp_ble_gattc_read_char(gattc_if, conn_id, elem->char_handle, ESP_GATT_AUTH_REQ_NONE))) {
+        ESP_LOGE(TAG, "Failed to enqueue request for handle %04x for attribute %04x; aborting.", elem->char_handle, elem->uuid.uuid.uuid16);
+        goto done;
     }
 
-    for (size_t i = i < dev->cur_char; i < dev->nr_chars; i++) {
+    dev->state = DEVICE_READ_ATTR;
+
+    ESP_LOGI(TAG, "Requested read for handle %04x", elem->uuid.uuid.uuid16);
+
+    ret = 0;
+done:
+    return ret;
+}
+
+static
+int _device_prepare_hoover_service_attribs(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id, uint16_t start_hdl, uint16_t end_hdl)
+{
+    int ret = -1;
+
+    uint16_t count = 0;
+
+    if (NULL != dev->chars) {
+        free(dev->chars);
+        dev->chars = NULL;
+    }
+
+    dev->cur_char = 0;
+    dev->nr_chars = 0;
+
+    if (ESP_GATT_OK != esp_ble_gattc_get_attr_count(gattc_if, conn_id,
+                ESP_GATT_DB_CHARACTERISTIC, start_hdl, end_hdl, INVALID_HANDLE, &count))
+    {
+        ESP_LOGE(TAG, "Failed to get service attribute count, aborting");
+        ret = 0;
+        goto done;
+    }
+
+    if (0 == count) {
+        ESP_LOGE(TAG, "There were no characteristics for this service, aborting");
+        ret = 0;
+        goto done;
+    }
+
+    if (NULL == (dev->chars = malloc(count * sizeof(*dev->chars)))) {
+        ESP_LOGE(TAG, "Failed to allocate memory for %u attributes", (unsigned)count);
+        ret = 0;
+        goto done;
+    }
+
+    dev->nr_chars = count;
+
+    if (ESP_GATT_OK != esp_ble_gattc_get_all_char(gattc_if, conn_id, start_hdl, end_hdl, dev->chars, &count, 0)) {
+        ESP_LOGE(TAG, "Failed to get characteristics for this service, aborting.");
+        ret = 0;
+        goto done;
+    }
+
+    ret = 0;
+done:
+    if (0 != ret) {
+        free(dev->chars);
+        dev->chars = NULL;
+        dev->cur_char = 0;
+        dev->nr_chars = 0;
+    }
+
+    return ret;
+}
+
+static
+bool __device_attr_is_interesting(uint16_t attr)
+{
+    switch(attr) {
+    case BLE_SERVICE_GENERIC_ACCESS_ATTR_NAME:
+    case BLE_SERVICE_GENERIC_ACCESS_ATTR_APPEARANCE:
+        return true;
+    case BLE_SERVICE_DEVICE_INFO_ATTR_MANUF_NAME:
+    case BLE_SERVICE_DEVICE_INFO_ATTR_MODEL_NUMBER:
+    case BLE_SERVICE_DEVICE_INFO_ATTR_SERIAL_NUMBER:
+    case BLE_SERVICE_DEVICE_INFO_ATTR_FIRMWARE_REV:
+    case BLE_SERVICE_DEVICE_INFO_ATTR_SOFTWARE_REV:
+    case BLE_SERVICE_DEVICE_INFO_ATTR_SYSTEM_ID:
+    case BLE_SERVICE_DEVICE_INFO_ATTR_PNP_ID:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static
+int _device_hoover_service_attribs(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id)
+{
+    int ret = 1;
+
+    struct ble_service *svc = NULL;
+
+    ESP_LOGI(HOOVER, "Hoovering attributes starting at characteristic %zu (of %zu) (service %zu)", dev->cur_char, dev->nr_chars, dev->cur_svc);
+
+    for (size_t i = dev->cur_char; i < dev->nr_chars; i++) {
         /* Check if this is one we want to read */
         esp_gattc_char_elem_t *charac = &dev->chars[i];
 
-        if (charac->uuid.len == ESP_UUID_LEN_16) {
-            if (_device_request_read_attrib(dev, gattc_if, conn_id, svc)) {
+        if (charac->uuid.len == ESP_UUID_LEN_16 && __device_attr_is_interesting(charac->uuid.uuid.uuid16)) {
+            if (_device_request_read_attrib(dev, gattc_if, conn_id, charac)) {
                 goto done;
             }
 
@@ -188,10 +210,14 @@ int _device_hoover_attribs(struct device *dev, esp_gatt_if_t gattc_if, uint16_t 
             goto done;
         }
 
-        /* Otherwise, just grab the attribute infomration */
-        if (ble_service_add_attribute(svc, &dev->cur_chars[i].uuid, NULL, 0)) {
+        if (ble_object_get_service(dev->obj, dev->cur_svc, &svc)) {
+            ESP_LOGE(TAG, "Fatal error while getting BLE service, aborting.");
+            goto done;
+        }
+
+        /* Otherwise, just grab the attribute infomration from the DB and continue */
+        if (ble_service_add_attribute(svc, &dev->chars[i].uuid, NULL, 0)) {
             ESP_LOGE(TAG, "Failed to add descriptor to service, skipping");
-            continue;
         }
 
         dev->cur_char++;
@@ -218,40 +244,8 @@ int device_on_found_service(struct device *dev, esp_gatt_if_t gattc_if, uint16_t
 
     if (ble_object_add_service(dev->obj, &svc, service_uuid, start_hdl, end_hdl)) {
         ESP_LOGE(TAG, "Failed to add service record; proceeding with caution.");
-    }
-
-    if (service_uuid->len != ESP_UUID_LEN_16) {
         goto done;
     }
-
-    for (size_t i = 0; i < BLE_ARRAY_LEN(services); i++) {
-        if (services[i].service_id == service_uuid->uuid.uuid16) {
-            services[i].handle_lo = start_hdl;
-            services[i].handle_hi = end_hdl;
-            services[i].svc = svc;
-        }
-    }
-
-    ret = 0;
-done:
-    return ret;
-}
-
-/**
- * Send a request to read a single GATT attribute.
- */
-static
-int _device_request_read_attrib(struct device *dev, esp_gatt_if_t gattc_if, esp_gattc_char_elem_t const *elem, uint16_t conn_id, struct ble_service_info const *svc)
-{
-    int ret = 1;
-
-    /* Enqueue a read request for attribute */
-    if (ESP_GATT_OK != (status = esp_ble_gattc_read_char(gattc_if, conn_id, elem->char_handle, ESP_GATT_AUTH_REQ_NONE))) {
-        ESP_LOGE(TAG, "Failed to enqueue request for handle %04x for attribute %04x; aborting.", elem->char_handle, elem->uuid.uuid16);
-        goto done;
-    }
-
-    ESP_LOGI(TAG, "Requested read for handle %04x", elem->uuid.uuid16);
 
     ret = 0;
 done:
@@ -264,11 +258,8 @@ int device_on_search_finished(struct device *dev, esp_gatt_if_t gattc_if, uint16
 
     uint16_t start_hdl = 0,
              end_hdl = 0;
-    esp_bt_uuid_t const *uuid = NULL;
 
     dev->state = DEVICE_FIND_SERVICES;
-    dev->service_id = 0;
-    dev->attr_id = 0;
     dev->nr_chars = 0;
     dev->cur_char = 0;
     dev->nr_svcs = 0;
@@ -285,15 +276,30 @@ int device_on_search_finished(struct device *dev, esp_gatt_if_t gattc_if, uint16
     }
 
     for (size_t i = 0; i < dev->nr_svcs; i++) {
-        if (ble_object_get_service_info(dev->obj, 0, &uuid, &start_hdl, &end_hdl)) {
+        if (ble_object_get_service_info(dev->obj, 0, &start_hdl, &end_hdl)) {
             ESP_LOGE(TAG, "Failed to get service info, aborting.");
             goto done;
         }
 
-        if (_device_hoover_attribs(dev, gattc_if, conn_id, uuid, start_hdl, end_hdl)) {
-            ESP_LOGE(TAG, "Failed to start hoovering attributes, aborting.");
+        if (_device_prepare_hoover_service_attribs(dev, gattc_if, conn_id, start_hdl, end_hdl)) {
+            ESP_LOGE(TAG, "Failed to preare to start hoovering attributes, aborting.");
             goto done;
         }
+
+        if (_device_hoover_service_attribs(dev, gattc_if, conn_id)) {
+            ESP_LOGE(TAG, "Failed to read attributes, aborting");
+            goto done;
+        }
+
+        if (dev->state == DEVICE_READ_ATTR) {
+            /* Hoovering enqueued a pending read */
+            break;
+        }
+    }
+
+    if (dev->state != DEVICE_READ_ATTR) {
+        /* Schedule a disconnect */
+        esp_ble_gattc_close(gattc_if, conn_id);
     }
 
     ret = 0;
@@ -309,6 +315,16 @@ int device_on_disconnect(struct device *dev, unsigned reason)
     dev->interrogated = true;
 
     ESP_LOGI(TAG, "Device disconnected (reason: %u)", reason);
+
+    if (NULL != dev->chars) {
+        /* This disconnect is likely spurious, so kill the iteration state */
+        free(dev->chars);
+        dev->chars = NULL;
+        dev->nr_chars = 0;
+        dev->cur_char = 0;
+        dev->cur_svc = 0;
+        dev->nr_svcs = 0;
+    }
 
     if (NULL != dev->obj) {
         if (ble_object_serialize(dev->obj, &dev->encoded_obj, &dev->encoded_obj_len)) {
@@ -333,29 +349,67 @@ int device_on_read_characteristic(struct device *dev, esp_gatt_if_t gattc_if, ui
 {
     int ret = 1;
 
-    struct ble_service_info *svi = NULL;
+    struct ble_service *svc = NULL;
 
     ESP_LOGI(TAG, "Read %zu bytes from handle %u", data_len, handle);
     ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_INFO);
 
+    if (ble_object_get_service(dev->obj, dev->cur_svc, &svc)) {
+        ESP_LOGE(TAG, "Failed to get service ID %zu, aborting", dev->cur_svc);
+        goto done;
+    }
+
     /* Add the just-read attribute */
-    if (ble_service_add_attribute(svi->svc, &dev->chars[dev->cur_char], data, data_len)) {
+    if (ble_service_add_attribute(svc, &dev->chars[dev->cur_char].uuid, data, data_len)) {
         ESP_LOGE(TAG, "Failed to log the fact that we just read an attribute.");
     }
 
+    /* Increment past this characteristic we just read */
+    dev->cur_char++;
+
+    if (dev->cur_char >= dev->nr_chars) {
+        dev->cur_svc++;
+        free(dev->chars);
+        dev->chars = NULL;
+        dev->cur_char = 0;
+        dev->nr_chars = 0;
+    }
+
+    /* Let's look for services we're interested in */
+    dev->state = DEVICE_FIND_SERVICES;
+
     /* Resume iteration */
     for (size_t i = dev->cur_svc; i < dev->nr_svcs; i++) {
-        if (ble_object_get_service_info(dev->obj, 0, &uuid, &start_hdl, &end_hdl)) {
-            ESP_LOGE(TAG, "Failed to get service info, aborting.");
+        if (NULL == dev->chars) {
+            uint16_t start_hdl = 0,
+                     end_hdl = 0;
+            if (ble_object_get_service_info(dev->obj, i, &start_hdl, &end_hdl)) {
+                ESP_LOGE(TAG, "Failed to get service info, aborting.");
+                goto done;
+            }
+
+            if (_device_prepare_hoover_service_attribs(dev, gattc_if, conn_id, start_hdl, end_hdl)) {
+                ESP_LOGE(TAG, "Failed to initiate device hoovering, aborting.");
+                goto done;
+            }
+        }
+
+        if (_device_hoover_service_attribs(dev, gattc_if, conn_id)) {
+            ESP_LOGE(TAG, "Failed to hoover attributes, aborting.");
             goto done;
         }
 
-        if (_device_hoover_attribs(dev, gattc_if, conn_id, uuid, start_hdl, end_hdl)) {
-            ESP_LOGE(TAG, "Failed to start hoovering attributes, aborting.");
-            goto done;
+        if (dev->state == DEVICE_READ_ATTR) {
+            /* A read is pending */
+            break;
         }
     }
 
+    if (dev->state != DEVICE_READ_ATTR) {
+        /* Schedule a disconnect */
+        ESP_LOGE(HOOVER, "All done, scheduling a disconnect.");
+        esp_ble_gattc_close(gattc_if, conn_id);
+    }
 
     ret = 0;
 done:

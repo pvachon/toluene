@@ -256,6 +256,27 @@ done:
     return ret;
 }
 
+int ble_object_get_service(struct ble_object *obj, size_t svc_id, struct ble_service **psvc)
+{
+    int ret = -1;
+
+    if (NULL == obj || NULL == psvc) {
+        ESP_LOGE(TAG, "Programmer error: NULL pointer for output values in get_service");
+        goto done;
+    }
+
+    if (svc_id >= obj->nr_services) {
+        ESP_LOGE(TAG, "Service %zu does not exist (there are %zu services)", svc_id, obj->nr_services);
+        goto done;
+    }
+
+    *psvc = BL_CONTAINER_OF(obj->svc_ptrs[svc_id], struct ble_service, svc);
+
+    ret = 0;
+done:
+    return ret;
+}
+
 int ble_service_add_attribute(struct ble_service *svc, esp_bt_uuid_t const *uuid, void const *data, size_t data_len)
 {
     int ret = -1;
