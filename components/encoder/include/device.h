@@ -28,12 +28,15 @@ struct device {
     bool connectable;
     bool interrogated;
     uint8_t nr_interrogations;
-    uint8_t service_id;
-    uint8_t attr_id;
     uint8_t is_public;
     struct ble_object *obj;
     uint8_t *encoded_obj;
     size_t encoded_obj_len;
+    esp_gattc_char_elem_t *chars;
+    size_t nr_chars;
+    size_t cur_char;
+    size_t cur_svc;
+    size_t nr_svcs;
 };
 
 #define DEV_RBTREE(x)   RB_CONTAINER_OF((x), struct device, r_node)
