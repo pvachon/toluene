@@ -3,7 +3,6 @@ DeviceIdentity
     DEFINITIONS AUTOMATIC TAGS ::=
 BEGIN
 
-
 -- ECC signature, based on X9.64, containing (r, s). The algorithm and the
 -- type of key are pre-negotiated based on the use case.
 Signature ::= SEQUENCE {
@@ -34,13 +33,15 @@ DeviceIdentityInfo ::= SEQUENCE {
     -- The identity certificate chain for this device. This is an array of certificates,
     -- the first being the certificate representing the device, all the way up to the
     -- root. The root must match one of the trusted roots for the device.
-    identityCertChain SEQUENCE OF BIT STRING
+
+    -- Optional for now.
+    identityCertChain SEQUENCE OF BIT STRING OPTIONAL
 }
 
 -- A signed bundle containing all the important identity information for this device
 DeviceIdentityBundle ::= SEQUENCE {
-    -- This device's identity info
-    identityInfo DeviceIdentityInfo,
+    -- This device's identity info, this will be decoded separately
+    identityInfo BIT STRING,
     -- Signature, from a trusted authority, for this device's identity information
     identityInfoSignature Signature
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 void control_task_init(void);
+void control_load_config(void);
 
 /* Signals for the control task */
 void control_task_signal_ble_ready(void);

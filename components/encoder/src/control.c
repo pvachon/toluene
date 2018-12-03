@@ -11,6 +11,15 @@
 #include "uploader.h"
 #include "device.h"
 
+#include "identity.h"
+
+#include <sys/types.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+
+#include <string.h>
+
 #define TAG "CONTROL"
 
 static
@@ -19,9 +28,9 @@ xTaskHandle _control_task_hdl;
 static
 EventGroupHandle_t _control_task_events;
 
-#define CONTROL_TASK_NAME                   "control"
-#define CONTROL_TASK_STACK_WORDS            8192
-#define CONTROL_TASK_PRIORITY               9
+#define CONTROL_TASK_NAME                           "control"
+#define CONTROL_TASK_STACK_WORDS                    8192
+#define CONTROL_TASK_PRIORITY                       9
 
 #define CONTROL_TASK_STATUS_BLE_STARTED             (1 << 1)
 #define CONTROL_TASK_STATUS_BLE_FINISHED            (1 << 2)
@@ -56,6 +65,9 @@ enum control_state _control_state;
 
 static
 esp_timer_handle_t _control_timer;
+
+static
+struct identity device_ident;
 
 static
 esp_ble_scan_params_t ble_scan_params = {
@@ -281,12 +293,20 @@ void control_task_init(void)
 }
 
 static
-void _control_config_init(nvs_handle *phdl)
+void _control_config_init(struct identity *ident)
 {
     nvs_handle hdl = NULL;
 
-    assert(NULL != phdl);
-    *phdl = NULL;
+    uint32_t header = 0;
+    uint16_t length = 0;
+    uint8_t *body = NULL;
+
+    esp_err_t err = ESP_OK;
+
+    if (NULL == ident) {
+        ESP_LOGE(TAG, "Programmer error, identity pointer is NULL");
+        abort();
+    }
 
     if (ESP_OK != (err = nvs_open("huffer", NVS_READWRITE, &hdl))) {
         ESP_LOGE(TAG, "Fatal error while opening NVS partition for read-write, aborting (%d)", err);
@@ -298,85 +318,171 @@ void _control_config_init(nvs_handle *phdl)
         abort();
     }
 
-    *phdl = hdl;
+    ESP_LOGI(TAG, "Waiting for identity blob.");
+
+#define CONTROL_CONFIG_HEADER           0xbebafeca
+
+    int fd = -1;
+
+    if (0 > (fd = open("/dev/uart/0", O_RDWR))) {
+        int errnum = errno;
+        ESP_LOGE(TAG, "Failed to open uart, aborting (errnum = %d, %s)", errnum, strerror(errnum));
+        abort();
+    }
+
+    do {
+        /* Read 4 bytes of header */
+        if (4 != read(fd, &header, 4)) {
+            int errnum = errno;
+            ESP_LOGE(TAG, "An error occurred while reading from the console, aborting (errnum = %d, %s)", errnum, strerror(errnum));
+            abort();
+        }
+
+        if (header != CONTROL_CONFIG_HEADER) {
+            ESP_LOGE(TAG, "Malformed header, got %08x, expected %08x", header, CONTROL_CONFIG_HEADER);
+            continue;
+        }
+
+        /* Wait for 2 bytes on the console indicating the length of the blob */
+        if (2 != read(fd, &length, 2)) {
+            int errnum = errno;
+            ESP_LOGE(TAG, "An error occurred while reading the length, aborting (errnum = %d, %s)", errnum, strerror(errnum));
+            abort();
+        }
+
+        if (length > IDENTITY_BLOB_LENGTH_MAX || length < 128) {
+            ESP_LOGE(TAG, "Identity blob's size doesn't make sense, restarting protocol");
+            continue;
+        }
+
+        /* Allocate memory to receive the blob */
+        if (NULL == (body = realloc(body, length))) {
+            ESP_LOGE(TAG, "Unable to reallocate memory for the body, restarting protocol");
+            continue;
+        }
+
+        /* Wait for entire blob to be received */
+        ESP_LOGI(TAG, "Waiting for %u bytes of body", (unsigned)length);
+
+        if (length != read(fd, body, length)) {
+            int errnum = errno;
+            ESP_LOGE(TAG, "An error occurred while reading the configuration body, aborting (errnum =  %d, %s).", errnum, strerror(errnum));
+            abort();
+        }
+
+        /* Validate the blob's contents, per our normal path */
+        if (identity_read(ident, body, length)) {
+            ESP_LOGE(TAG, "Identity bundle is invalid, restarting protocol.");
+            continue;
+        }
+
+        /* Store the blob to flash on success and break */
+        if (ESP_OK != nvs_set_blob(hdl, "identity", body, length)){
+            ESP_LOGE(TAG, "Failed to write identity blob to NVS, aborting.");
+            abort();
+        }
+
+        if (ESP_OK != nvs_commit(hdl)) {
+            ESP_LOGE(TAG, "Failed to commit identity to NVS, aborting.");
+            abort();
+        }
+
+        /* And we're done */
+        break;
+    } while (1);
+
+    if (NULL != body) {
+        free(body);
+        body = NULL;
+    }
+
+    nvs_close(hdl);
+    close(fd);
 }
 
 static
-const char *_control_config_keys_str[] = {
-    "wifiESSID",
-    "wifiPassword",
-    "targetHost",
-    "targetPort",
-};
-
-static
-const char *_control_config_keys_i32[] = {
-    "deviceId",
-}
-
-#define NR_KEYS(x)      (sizeof((x))/sizeof((x)[0]))
-
-static
-bool __control_config_check_keys(nvs_handle hdl)
+int _control_config_load(struct identity *ident)
 {
-    for (size_t i = 0; i < NR_KEYS(_control_config_keys_str); i++) {
-        const char *key = _control_config_keys_str[i];
-        char value[64];
-        size_t value_len = sizeof(value);
-        if (ESP_OK != nvs_get_str(hdl, key, value, &value_len)) {
-            return false;
-        }
+    int ret = -1;
+
+    size_t length = 0;
+    uint8_t *blob = NULL;
+    nvs_handle hdl;
+
+    if (ESP_OK != nvs_open("huffer", NVS_READONLY, &hdl)) {
+        ESP_LOGE(TAG, "Configuration partition does not exist, aborting.");
+        goto done_empty;
     }
 
-    for (size_t i = 0; i < NR_KEYS(_control_config_keys_i32); i++) {
-        const char *key = _control_config_keys_i32[i];
-        int32_t value;
-        if (ESP_OK != nvs_get_i32(hdl, key, &value)) {
-            return false;
-        }
+    if (NULL == ident) {
+        ESP_LOGE(TAG, "Programmer error, identity is NULL, aborting.");
+        abort();
     }
 
-    return true;
-}
-
-static
-void _control_config_init_subsys(void)
-{
-    nvs_handle hdl = NULL;
-
-    if (ESP_OK == (err = nvs_open("huffer", NVS_READONLY, &hdl))) {
-        if (__control_config_check_keys(hdl)) {
-            goto done;
-        }
-        ESP_LOGI(TAG, "Keys are missing or corrupt");
+    if (ESP_OK != nvs_get_blob(hdl, "identity", NULL, &length)) {
+        ESP_LOGE(TAG, "Failed to get identity blob, aborting.");
+        goto done;
     }
 
-    ESP_LOGI(TAG, "Kicking off configuration mode");
+    if (0 == length || length > IDENTITY_BLOB_LENGTH_MAX) {
+        ESP_LOGE(TAG, "Malformed identity blob, aborting.");
+        goto done;
+    }
 
-    /* Initialize the NVS namespace */
-    _control_config_init(&hdl);
+    if (NULL == (blob = malloc(length))) {
+        ESP_LOGE(TAG, "Out of memory for identity blob, aborting.");
+        abort();
+    }
 
-    /* Wait for 2 bytes on the console indicating the length of the blob */
+    if (ESP_OK != nvs_get_blob(hdl, "identity", blob, &length))  {
+        ESP_LOGE(TAG, "Unable to read identity blob, aborting.");
+        goto done;
+    }
 
+    ESP_LOGI(TAG, "Successfully loaded identity from NVS, continuing!");
 
+    ret = 0;
 done:
-    ;
-}
+    nvs_close(hdl);
 
-void control_check_config(void)
-{
-    /* Check for the required NVS keys */
-    nvs_handle hdl = NULL;
-    esp_err_t err;
+    if (0 != ret) {
+        if (ESP_OK != nvs_open("huffer", NVS_READWRITE, &hdl)) {
+            ESP_LOGE(TAG, "Failed to reopen partition as read/write");
+            abort();
+        }
 
-    ESP_LOGI(TAG, "Bringing up non-volatile storage");
-    _control_config_init_subsys();
+        if (ESP_OK != nvs_erase_all(hdl)) {
+            ESP_LOGE(TAG, "Failed to clear NVS, aborting.");
+            abort();
+        }
 
+        if (ESP_OK != nvs_commit(hdl)) {
+            ESP_LOGE(TAG, "Failed to commit NVS, aborting.");
+            abort();
+        }
 
-done:
-    if (NULL != hdl) {
         nvs_close(hdl);
     }
+
+done_empty:
+    return ret;
+}
+
+static
+void _control_config_init_subsys(struct identity *ident)
+{
+    /* Try loading the configuration */
+    if (_control_config_load(ident)) {
+        /* There is no configuration, so wait for a blob to be loaded via the UART */
+        ESP_LOGE(TAG, "There is no configuration available, waiting for an identity to load");
+        _control_config_init(ident);
+    }
+}
+
+void control_load_config(void)
+{
+    ESP_LOGI(TAG, "Initializing device identity");
+    _control_config_init_subsys(&device_ident);
 }
 
 void control_task_signal_ble_ready(void)

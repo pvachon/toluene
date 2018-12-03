@@ -17,6 +17,8 @@
 #include "esp_bt_main.h"
 #include "esp_gatt_common_api.h"
 #include "esp_log.h"
+#include "esp_vfs_dev.h"
+#include "driver/uart.h"
 
 #include "freertos/FreeRTOS.h"
 
@@ -378,7 +380,24 @@ void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_ga
     }
 }
 
-void app_main()
+void setup_uart(void)
+{
+    setvbuf(stdin, NULL, _IONBF, 0);
+
+    const uart_config_t uart_config = {
+        .baud_rate = CONFIG_CONSOLE_UART_BAUDRATE,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .use_ref_tick = true
+    };
+
+	ESP_ERROR_CHECK(uart_param_config(CONFIG_CONSOLE_UART_NUM, &uart_config));
+    ESP_ERROR_CHECK(uart_driver_install(CONFIG_CONSOLE_UART_NUM, 512, 0, 0, NULL, 0));
+    esp_vfs_dev_uart_use_driver(CONFIG_CONSOLE_UART_NUM);
+}
+
+void app_main(void)
 {
     // Initialize NVS.
     esp_err_t ret = nvs_flash_init();
@@ -444,7 +463,8 @@ void app_main()
         ESP_LOGE(TAG, "set local  MTU failed, error code = %x", local_mtu_ret);
     }
 
-    control_check_config();
+    setup_uart();
+    control_load_config();
     control_task_signal_ble_ready();
 
     ESP_LOGI(TAG, "We are on the air!");
