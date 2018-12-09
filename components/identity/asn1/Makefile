@@ -7,6 +7,6 @@ target:
 
 clean:
 	$(RM) *.c *.h
-	$(RM) *.o
+	$(RM) *.o *.d
 
 .PHONY: target clean

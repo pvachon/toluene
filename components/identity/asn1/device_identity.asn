@@ -7,9 +7,10 @@ BEGIN
 -- type of key are pre-negotiated based on the use case.
 Signature ::= SEQUENCE {
     -- Signature r
-    r BIT STRING,
+    r INTEGER,
+
     -- Signature s
-    s BIT STRING
+    s INTEGER
 }
 
 -- Contains the actual device identity information that is to be used
@@ -41,7 +42,7 @@ DeviceIdentityInfo ::= SEQUENCE {
 -- A signed bundle containing all the important identity information for this device
 DeviceIdentityBundle ::= SEQUENCE {
     -- This device's identity info, this will be decoded separately
-    identityInfo BIT STRING,
+    identityInfo DeviceIdentityInfo,
     -- Signature, from a trusted authority, for this device's identity information
     identityInfoSignature Signature
 }
