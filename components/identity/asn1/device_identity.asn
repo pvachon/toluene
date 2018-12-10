@@ -7,10 +7,10 @@ BEGIN
 -- type of key are pre-negotiated based on the use case.
 Signature ::= SEQUENCE {
     -- Signature r
-    r INTEGER,
+    r OCTET STRING,
 
     -- Signature s
-    s INTEGER
+    s OCTET STRING
 }
 
 -- Contains the actual device identity information that is to be used

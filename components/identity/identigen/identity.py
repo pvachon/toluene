@@ -13,6 +13,20 @@ import device_identity
 
 import argparse
 import logging
+import serial
+import struct
+import io
+
+def uart_write_identity(ser, blob):
+    header = struct.pack('<LH', 0xbebafeca, len(blob))
+    ser.write(header)
+    ser.write(blob)
+
+    sio = io.TextIOWrapper(io.BufferedRWPair(ser, ser), newline=None)
+
+    while True:
+        l = sio.readline().strip()
+        print('{}'.format(l))
 
 def main():
     parser = argparse.ArgumentParser(description='Prepare a device identity blob for a Toluene device')
@@ -24,6 +38,8 @@ def main():
     parser.add_argument('-I', '--device-id', help='device identifier used during submission', required=True, type=lambda x: int(x, 0))
     parser.add_argument('-K', '--private-key', help='private key file name', required=True, dest='private_key')
     parser.add_argument('-o', '--output-file', help='output file', dest='out_file', default='')
+    parser.add_argument('-U', '--uart', help='UART to write the identity blob out to', dest='uart', default='')
+    parser.add_argument('-B', '--baud', help='The baud rate', dest='baud_rate', default=115200)
 
     args = parser.parse_args()
 
@@ -65,8 +81,8 @@ def main():
     bundle = {
         'identityInfo': di_raw,
         'identityInfoSignature': {
-            'r': r,
-            's': s,
+            'r': r.to_bytes(32, byteorder='big'),
+            's': s.to_bytes(32, byteorder='big'),
         },
     }
     bundle_raw = decode(bundle, asn1Spec=device_identity.DeviceIdentityBundle())
@@ -76,6 +92,12 @@ def main():
         logging.debug('Writing to {}'.format(args.out_file))
         with open(args.out_file, 'wb+') as fp:
             fp.write(bundle_encoded)
+
+    if args.uart:
+        logging.info('Writing to UART {} ({},8n1)'.format(args.uart, args.baud_rate))
+        ser = serial.Serial(args.uart, args.baud_rate, timeout=1, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, rtscts=0)
+
+        uart_write_identity(ser, bundle_encoded)
 
 if __name__ == '__main__':
     main()

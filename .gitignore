@@ -4,3 +4,5 @@ build
 *.elf
 *.sw*
 *.d
+__pycache__
+tags

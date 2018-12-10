@@ -334,7 +334,7 @@ void _control_config_init(struct identity *ident)
         /* Read 4 bytes of header */
         if (4 != read(fd, &header, 4)) {
             int errnum = errno;
-            ESP_LOGE(TAG, "An error occurred while reading from the console, aborting (errnum = %d, %s)", errnum, strerror(errnum));
+            ESP_LOGE(TAG, "An error occurred while reading the header from the console, aborting (errnum = %d, %s)", errnum, strerror(errnum));
             abort();
         }
 
@@ -346,7 +346,7 @@ void _control_config_init(struct identity *ident)
         /* Wait for 2 bytes on the console indicating the length of the blob */
         if (2 != read(fd, &length, 2)) {
             int errnum = errno;
-            ESP_LOGE(TAG, "An error occurred while reading the length, aborting (errnum = %d, %s)", errnum, strerror(errnum));
+            ESP_LOGE(TAG, "An error occurred while reading the length from the console, aborting (errnum = %d, %s)", errnum, strerror(errnum));
             abort();
         }
 
@@ -361,13 +361,19 @@ void _control_config_init(struct identity *ident)
             continue;
         }
 
-        /* Wait for entire blob to be received */
-        ESP_LOGI(TAG, "Waiting for %u bytes of body", (unsigned)length);
+        long bytes = 0;
 
-        if (length != read(fd, body, length)) {
-            int errnum = errno;
-            ESP_LOGE(TAG, "An error occurred while reading the configuration body, aborting (errnum =  %d, %s).", errnum, strerror(errnum));
-            abort();
+        while (bytes < length) {
+            long ret = 0;
+
+            ret = read(fd, body + bytes, length - bytes);
+            if (ret < 0) {
+                int errnum = errno;
+                ESP_LOGE(TAG, "An error occurred while reading the configuration body, aborting (errnum =  %d, %s) - read %ld bytes of %zu.", errnum, strerror(errnum), bytes, length);
+                abort();
+            }
+
+            bytes += ret;
         }
 
         /* Validate the blob's contents, per our normal path */
