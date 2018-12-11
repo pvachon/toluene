@@ -496,6 +496,27 @@ void control_load_config(void)
     _control_config_init_subsys(&device_ident);
 }
 
+void control_get_config_wifi(char *essid, char *password)
+{
+    strncpy(essid, device_ident.wifi_essid, IDENTITY_ESSID_LEN_MAX);
+    strncpy(password, device_ident.wifi_password, IDENTITY_PASSWORD_LEN_MAX);
+}
+
+void control_get_config_device_info(char const **phostname, uint16_t *pport, uint32_t *pdev_id)
+{
+    if (NULL != phostname) {
+        *phostname = device_ident.target_host;
+    }
+
+    if (NULL != pport) {
+        *pport = device_ident.target_port;
+    }
+
+    if (NULL != pdev_id) {
+        *pdev_id = device_ident.device_id;
+    }
+}
+
 void control_task_signal_ble_ready(void)
 {
     xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_BLE_READY);

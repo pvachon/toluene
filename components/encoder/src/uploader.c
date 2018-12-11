@@ -52,12 +52,6 @@ xTaskHandle _uploader_task_hdl;
  */
 #define STATUS_BIT_TERMINATE                (1 << 0)
 
-#define CONFIG_TARGET_HOST                  "enraged.openbsd-hotties.org"
-
-#define CONFIG_ESSID                        "GL-MT300N-V2-269"
-#define CONFIG_WPA2_PSK_PASSWORD            "russians"
-#define CONFIG_SERVICE_PORT                 24601
-
 struct connect_hello {
     uint16_t magic;
     uint16_t nr_records;
@@ -186,7 +180,7 @@ done:
 }
 
 static
-int _uploader_connect(struct ip4_addr addr, int *pfd)
+int _uploader_connect(struct ip4_addr addr, uint16_t port, int *pfd)
 {
     int ret = -1;
 
@@ -214,7 +208,7 @@ int _uploader_connect(struct ip4_addr addr, int *pfd)
 
     sin.sin_family = AF_INET;
     sin.sin_addr.s_addr = addr.addr;
-    sin.sin_port = htons(CONFIG_SERVICE_PORT);
+    sin.sin_port = htons(port);
     if (0 > (r = connect(fd, (struct sockaddr *)&sin, sizeof(sin)))) {
         int errnum = errno;
         ESP_LOGE(TAG, "Failed to connect to specified service, reason %d (%s) aborting.", errnum, strerror(errnum));
@@ -330,6 +324,10 @@ void _uploader_task(void *p)
     int conn_fd = -1;
     struct ip4_addr addr;
     bool resolved = false;
+    char const *host_name = NULL;
+    uint16_t port = 0;
+
+    control_get_config_device_info(&host_name, &port, NULL);
 
     ESP_LOGI(TAG, "Worker task is starting");
 
@@ -343,9 +341,9 @@ void _uploader_task(void *p)
         if (bits & STATUS_BIT_WIFI_CONNECTED) {
             /* We've been woken up */
             if (false == resolved) {
-                ESP_LOGI(TAG, "Resolving host " CONFIG_TARGET_HOST "...");
-                if (_uploader_resolve_host(CONFIG_TARGET_HOST, &addr)) {
-                    ESP_LOGE(TAG, "Failed to resolve host " CONFIG_TARGET_HOST ", aborting");
+                ESP_LOGI(TAG, "Resolving host %s...", host_name);
+                if (_uploader_resolve_host(host_name, &addr)) {
+                    ESP_LOGE(TAG, "Failed to resolve host %s, aborting", host_name);
                     abort();
                 }
                 resolved = true;
@@ -359,7 +357,7 @@ void _uploader_task(void *p)
 
             size_t nr_devs = 0;
             if (0 != (nr_devs = device_tracker_nr_devs(NULL))) {
-                if (_uploader_connect(addr, &conn_fd)) {
+                if (_uploader_connect(addr, port, &conn_fd)) {
                     ESP_LOGE(TAG, "Failed to connect to uploader target, aborting.");
                     control_task_signal_wifi_failure();
                     esp_wifi_disconnect();
@@ -418,6 +416,10 @@ void _uploader_create_task(void)
  */
 void uploader_init(void)
 {
+    wifi_config_t wifi_cfg;
+
+    memset(&wifi_cfg, 0, sizeof(wifi_cfg));
+
     tcpip_adapter_init();
 
     _uploader_control = xEventGroupCreate();
@@ -430,13 +432,7 @@ void uploader_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
-    /* TODO: read the wifi config from NVS */
-    wifi_config_t wifi_cfg = {
-        .sta = {
-            .ssid = CONFIG_ESSID,
-            .password = CONFIG_WPA2_PSK_PASSWORD,
-        },
-    };
+    control_get_config_wifi((char *)wifi_cfg.sta.ssid, (char *)wifi_cfg.sta.password);
 
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_cfg));
 

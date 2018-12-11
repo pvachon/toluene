@@ -407,6 +407,9 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    setup_uart();
+    control_load_config();
+
     device_tracker_init(&tracker);
 
     uploader_init();
@@ -463,8 +466,6 @@ void app_main(void)
         ESP_LOGE(TAG, "set local  MTU failed, error code = %x", local_mtu_ret);
     }
 
-    setup_uart();
-    control_load_config();
     control_task_signal_ble_ready();
 
     ESP_LOGI(TAG, "We are on the air!");

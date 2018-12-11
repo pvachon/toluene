@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 void control_task_init(void);
 void control_load_config(void);
 
@@ -16,4 +18,8 @@ void control_task_signal_wifi_failure(void);
 void control_task_signal_wifi_down(void);
 
 void control_task_signal_ntp_done(void);
+
+/* Get configuration parameters */
+void control_get_config_wifi(char *essid, char *password);
+void control_get_config_device_info(char const **phostname, uint16_t *pport, uint32_t *pdev_id);
 
