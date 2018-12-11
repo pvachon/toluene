@@ -1,16 +1,16 @@
 DeviceIdentity
-    { iso org(3) dod(6) internet(1) private(4) enterprise(1) twsided(46690) huffer(8) toluene(1) identity(1) }
-    DEFINITIONS AUTOMATIC TAGS ::=
+--    { iso org(3) dod(6) internet(1) private(4) enterprise(1) twsided(46690) huffer(8) toluene(1) identity(1) }
+    DEFINITIONS ::=
 BEGIN
 
 -- ECC signature, based on X9.64, containing (r, s). The algorithm and the
 -- type of key are pre-negotiated based on the use case.
 Signature ::= SEQUENCE {
     -- Signature r
-    r OCTET STRING,
+    r INTEGER,
 
     -- Signature s
-    s OCTET STRING
+    s INTEGER
 }
 
 -- Contains the actual device identity information that is to be used

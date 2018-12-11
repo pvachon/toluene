@@ -16,6 +16,7 @@ import logging
 import serial
 import struct
 import io
+import hexdump
 
 def uart_write_identity(ser, blob):
     header = struct.pack('<LH', 0xbebafeca, len(blob))
@@ -74,6 +75,8 @@ def main():
 
     di = der_encoder(di_raw)
 
+    hexdump.hexdump(di)
+
     r, s = decode_dss_signature(pk.sign(di, ec.ECDSA(hashes.SHA256())))
 
     logging.debug('Signature = ({}, {})'.format(r, s))
@@ -81,8 +84,8 @@ def main():
     bundle = {
         'identityInfo': di_raw,
         'identityInfoSignature': {
-            'r': r.to_bytes(32, byteorder='big'),
-            's': s.to_bytes(32, byteorder='big'),
+            'r': r,
+            's': s,
         },
     }
     bundle_raw = decode(bundle, asn1Spec=device_identity.DeviceIdentityBundle())

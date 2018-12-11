@@ -4,6 +4,9 @@
 #include <stddef.h>
 
 #define IDENTITY_BLOB_LENGTH_MAX            4096
+#define IDENTITY_ESSID_LEN_MAX              64
+#define IDENTITY_PASSWORD_LEN_MAX           64
+#define IDENTITY_TARGET_HOST_LEN_MAX        128
 
 /**
  * Structure representing the decoded and verified identity for this device.
@@ -12,17 +15,17 @@ struct identity {
     /**
      * The 802.11 AP ESSID we are to connect to
      */
-    char wifi_essid[64];
+    char wifi_essid[IDENTITY_ESSID_LEN_MAX];
 
     /**
      * The 802.11 AP's pre-shared key (for WPA2)
      */
-    char wifi_password[64];
+    char wifi_password[IDENTITY_PASSWORD_LEN_MAX];
 
     /**
      * The target host name, to be resolved using DNS
      */
-    char target_host[128];
+    char target_host[IDENTITY_TARGET_HOST_LEN_MAX];
 
     /**
      * Then port on the target host
@@ -46,5 +49,5 @@ struct identity {
  *
  * \return 0 on success, an error code otherwise.
  */
-int identity_read(struct identity *pident, void const *bundle, size_t bundle_length);
+int identity_read(struct identity *pident, void *bundle, size_t bundle_length);
 

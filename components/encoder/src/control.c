@@ -445,6 +445,11 @@ int _control_config_load(struct identity *ident)
         goto done;
     }
 
+    if (identity_read(ident, blob, length)) {
+        ESP_LOGE(TAG, "Failed to validate and decode identity blob, aborting.");
+        goto done;
+    }
+
     ESP_LOGI(TAG, "Successfully loaded identity from NVS, continuing!");
 
     ret = 0;
