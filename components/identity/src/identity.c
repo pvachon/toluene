@@ -195,8 +195,6 @@ int identity_read(struct identity *pident, void *bundle, size_t bundle_length)
     memset(pident, 0, sizeof(struct identity));
 
     /* Grab (r, s) from the outer sequence */
-    ESP_LOGI(TAG, "Grabbing (r, s) from outer sequence");
-
     if (mbedtls_asn1_get_tag(&bndl_p, bndl_end, &bndl_len, MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE)) {
         ESP_LOGI(TAG, "Failed to get outer, aborting.");
         goto done;
@@ -226,8 +224,6 @@ int identity_read(struct identity *pident, void *bundle, size_t bundle_length)
         ESP_LOGI(TAG, "Failed to get signature s, aborting.");
         goto done;
     }
-
-    ESP_LOGI(TAG, "Verifying blob signature");
 
     /* Verify the signature on the blob */
     if (_identity_check_signature(info_blob - 2, info_blob_len + 2, &r, &s, &sig_result)) {

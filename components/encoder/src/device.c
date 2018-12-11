@@ -200,7 +200,8 @@ int _device_hoover_service_attribs(struct device *dev, esp_gatt_if_t gattc_if, u
         /* Check if this is one we want to read */
         esp_gattc_char_elem_t *charac = &dev->chars[i];
 
-        if (charac->uuid.len == ESP_UUID_LEN_16 && __device_attr_is_interesting(charac->uuid.uuid.uuid16)) {
+        if (charac->properties & ESP_GATT_CHAR_PROP_BIT_READ) {
+        //if (charac->uuid.len == ESP_UUID_LEN_16 && __device_attr_is_interesting(charac->uuid.uuid.uuid16)) {
             if (_device_request_read_attrib(dev, gattc_if, conn_id, charac)) {
                 goto done;
             }
