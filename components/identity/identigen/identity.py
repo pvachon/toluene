@@ -27,7 +27,8 @@ def uart_write_identity(ser, blob):
 
     while True:
         l = sio.readline().strip()
-        print('{}'.format(l))
+        if l:
+            print('{}'.format(l))
 
 def main():
     parser = argparse.ArgumentParser(description='Prepare a device identity blob for a Toluene device')
