@@ -42,6 +42,17 @@ message ble_device {
     // Received advertising data
     bytes adv_data = 128;
 
+    // Whether or not this BDA is public or private
+    bool public_address = 129;
+
+    enum ble_adv_pdu_type {
+        ADV_IND = 0;
+        ADV_INDIRECT_IND = 1;
+        ADV_NONCONN_IND = 2;
+        ADV_SCAN_IND = 3;
+    }
+    ble_adv_pdu_type pdu_type = 130;
+
     // Metadata for a GATT service
     message ble_gatt_service {
         ble_uuid service_uuid = 500;

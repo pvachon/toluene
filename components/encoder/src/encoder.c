@@ -98,7 +98,7 @@ void _ble_obj_encode_uuid(esp_bt_uuid_t const *esp_uuid, uint8_t *long_mem, BleD
     }
 }
 
-int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectable, uint8_t const *bda_addr, void const *adv_data, uint32_t adv_len, uint32_t scan_rsp_len, int64_t timestamp)
+int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectable, esp_ble_evt_type_t evt_type, uint8_t const *bda_addr, bool is_public, void const *adv_data, uint32_t adv_len, uint32_t scan_rsp_len, int64_t timestamp)
 {
     int ret = -1;
 
@@ -127,6 +127,30 @@ int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectabl
     obj->dev.bda_address.data = obj->bda_addr;
     obj->dev.bda_address.len = 6;
     obj->dev.has_bda_address = 1;
+
+    /* Fill in the public vs. private state of the BDA */
+    obj->dev.has_public_address = 1;
+    obj->dev.public_address = is_public ? 1 : 0;
+
+    /* Fill in the event type */
+    obj->dev.has_pdu_type = 1;
+    switch (evt_type) {
+    case ESP_BLE_EVT_CONN_ADV:
+        obj->dev.pdu_type = BLE_DEVICE__BLE_ADV_PDU_TYPE__ADV_IND;
+        break;
+    case ESP_BLE_EVT_CONN_DIR_ADV:
+        obj->dev.pdu_type = BLE_DEVICE__BLE_ADV_PDU_TYPE__ADV_INDIRECT_IND;
+        break;
+    case ESP_BLE_EVT_DISC_ADV:
+        obj->dev.pdu_type = BLE_DEVICE__BLE_ADV_PDU_TYPE__ADV_SCAN_IND;
+        break;
+    case ESP_BLE_EVT_NON_CONN_ADV:
+        obj->dev.pdu_type = BLE_DEVICE__BLE_ADV_PDU_TYPE__ADV_NONCONN_IND;
+        break;
+    default:
+        ESP_LOGW(TAG, "Unknown event type, marking as non-connectable");
+        obj->dev.pdu_type = BLE_DEVICE__BLE_ADV_PDU_TYPE__ADV_NONCONN_IND;
+    }
 
     /* Fill in the advertising data, if present */
     if (0 != (adv_len + scan_rsp_len)) {

@@ -1,4 +1,5 @@
 OBJ=identity.o \
+	crypto.o \
 	$(patsubst %c,%o,$(wildcard asn1/*.c))
 
 OFLAGS=-O0 -ggdb
@@ -19,9 +20,6 @@ TARGET=identity
 
 $(TARGET): $(OBJ)
 	$(CXX) -o $(TARGET) $(OBJ) $(LDFLAGS)
-
-.cpp.o:
-	$(CXX) $(CXXFLAGS) -MMD -MP -o $@ -c $<
 
 clean:
 	$(RM) $(TARGET)

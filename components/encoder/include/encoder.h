@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp_bt_defs.h"
+#include "esp_gap_ble_api.h"
 
 #include <stdlib.h>
 #include <stdint.h>
@@ -9,7 +10,7 @@
 struct ble_object;
 struct ble_service;
 
-int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectable, uint8_t const *bda_addr, void const *adv_data, uint32_t adv_len, uint32_t scan_rsp_len, int64_t timestamp);
+int ble_object_new(struct ble_object **pobj, unsigned sensor_id, bool connectable, esp_ble_evt_type_t evt_type, uint8_t const *bda_addr, bool is_public, void const *adv_data, uint32_t adv_len, uint32_t scan_rsp_len, int64_t timestamp);
 
 int ble_object_add_service(struct ble_object *obj, struct ble_service **pservice, esp_bt_uuid_t const *uuid, uint16_t start_hdl, uint16_t end_hdl);
 int ble_object_get_service_count(struct ble_object *obj, size_t *pcnt);

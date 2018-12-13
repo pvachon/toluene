@@ -3,26 +3,6 @@
 
 #include <boost/program_options.hpp>
 
-#include <cryptopp/osrng.h>
-#include <cryptopp/integer.h>
-#include <cryptopp/filters.h>
-#include <cryptopp/files.h>
-#include <cryptopp/sha.h>
-#include <cryptopp/eccrypto.h>
-
-using CryptoPP::AutoSeededRandomPool;
-using CryptoPP::Integer;
-using CryptoPP::ArraySource;
-using CryptoPP::ArraySink;
-using CryptoPP::StringSink;
-using CryptoPP::SignerFilter;
-using CryptoPP::FileSource;
-using CryptoPP::FileSink;
-using CryptoPP::SHA256;
-using CryptoPP::ECDSA;
-using CryptoPP::ECP;
-using CryptoPP::DL_GroupParameters_EC;
-
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -160,12 +140,22 @@ private:
     DeviceIdentityBundle_t m_bundle;
 };
 
+#if 0
 static
-std::shared_ptr<ECDSA<ECP, SHA256>::PrivateKey> load_private_key(std::string const& key_file)
+std::shared_ptr<ECDSA<ECP, SHA1>::PrivateKey> load_private_key(std::string const& key_file)
 {
-    auto key = std::make_shared<ECDSA<ECP, SHA256>::PrivateKey>();
+    auto key = std::make_shared<ECDSA<ECP, SHA1>::PrivateKey>();
+    std::string key_str;
 
-    key->Load(FileSource( key_file.c_str(), true).Ref());
+    auto fs = std::make_unique<FileSource>(key_file.c_str(), true, new HexEncoder(new StringSink(key_str)));
+    std::cout << key_str << std::endl;
+
+//    try {
+        key->Load(FileSource(key_file.c_str(), true).Ref());
+//    } catch (CryptoPP::BERDecodeErr const& e) {
+//        std::cerr << "Failure during key load: " << e.what() << std::endl;
+//        throw;
+//    }
 
     return key;
 }
@@ -185,6 +175,7 @@ std::string gen_info_blob_signature(std::shared_ptr<ECDSA<ECP, SHA256>::PrivateK
 
     return signature;
 }
+#endif
 
 int main(int argc, char* argv[])
 {
@@ -228,16 +219,18 @@ int main(int argc, char* argv[])
         return EXIT_SUCCESS;
     }
 
-    std::cout << "Loading identity signing key..." << std::endl;
-    auto priv_key = load_private_key(signing_key);
+    //std::cout << "Loading identity signing key..." << std::endl;
+    //auto priv_key = load_private_key(signing_key);
 
     // Encode the connectivity information object
+    std::cout << "Encoding identity information..." << std::endl;
     auto info = std::make_shared<DeviceIdentityInfoWrapper>(essid, password, hostname, device_id, port);
 
     // Generate the signature
+    std::cout << "Signing identity information blob..." << std::endl;
     size_t encoded_len = 0;
     auto encoded_info = info->get_encoded(encoded_len);
-    auto signature = gen_info_blob_signature(priv_key, encoded_info, encoded_len);
+    //auto signature = gen_info_blob_signature(priv_key, encoded_info, encoded_len);
 
     // Encode the blob
 

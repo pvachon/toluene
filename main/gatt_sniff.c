@@ -287,6 +287,7 @@ void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
                         scan_result->scan_rst.adv_data_len, scan_result->scan_rst.scan_rsp_len);
 
                 dev = device_new(bda, scan_result->scan_rst.ble_addr_type == BLE_ADDR_TYPE_PUBLIC,
+                        scan_result->scan_rst.ble_evt_type,
                         scan_result->scan_rst.ble_evt_type == ESP_BLE_EVT_CONN_ADV,
                         scan_result->scan_rst.adv_data_len,
                         scan_result->scan_rst.scan_rsp_len,
