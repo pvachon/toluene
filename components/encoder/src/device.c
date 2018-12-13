@@ -167,6 +167,7 @@ done:
     return ret;
 }
 
+#if 0
 static
 bool __device_attr_is_interesting(uint16_t attr)
 {
@@ -186,6 +187,7 @@ bool __device_attr_is_interesting(uint16_t attr)
         return false;
     }
 }
+#endif
 
 static
 int _device_hoover_service_attribs(struct device *dev, esp_gatt_if_t gattc_if, uint16_t conn_id)
@@ -478,7 +480,7 @@ int64_t _device_get_timestamp(void)
     return tv.tv_sec * 1000000LL + (tv.tv_usec/1000000LL);
 }
 
-struct device *device_new(uint8_t const * mac, esp_ble_evt_type_t evt_type, bool is_public, bool connectable, size_t adv_data_len, size_t scan_rsp_len, uint8_t const * adv_data)
+struct device *device_new(uint32_t sensor_id, uint8_t const * mac, esp_ble_evt_type_t evt_type, bool is_public, bool connectable, size_t adv_data_len, size_t scan_rsp_len, uint8_t const * adv_data)
 {
     struct device *ndev = calloc(1, sizeof(struct device));
 
@@ -497,7 +499,7 @@ struct device *device_new(uint8_t const * mac, esp_ble_evt_type_t evt_type, bool
     ndev->time_us = _device_get_timestamp();
 
     /* Create the object */
-    if (ble_object_new(&ndev->obj, 24601, ndev->connectable, evt_type, mac, is_public, adv_data, adv_data_len, scan_rsp_len, ndev->time_us)) {
+    if (ble_object_new(&ndev->obj, sensor_id, ndev->connectable, evt_type, mac, is_public, adv_data, adv_data_len, scan_rsp_len, ndev->time_us)) {
         ESP_LOGE(TAG, "Failed to create BLE object, aborting.");
         goto done;
     }

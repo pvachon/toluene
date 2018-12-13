@@ -50,7 +50,7 @@ struct device_tracker tracker;
 size_t device_tracker_nr_devs(struct device_tracker *trk);
 size_t device_tracker_nr_bytes_used(struct device_tracker *trk);
 
-struct device *device_new(uint8_t const * mac, esp_ble_evt_type_t evt_type, bool is_public, bool connectable, size_t adv_data_len, size_t scan_rsp_len, uint8_t const * adv_data);
+struct device *device_new(uint32_t sensor_id, uint8_t const * mac, esp_ble_evt_type_t evt_type, bool is_public, bool connectable, size_t adv_data_len, size_t scan_rsp_len, uint8_t const * adv_data);
 void device_tracker_init(struct device_tracker *trk);
 int device_tracker_insert(struct device_tracker *trk, struct device *dev);
 int device_tracker_remove(struct device_tracker *trk, struct device *dev);

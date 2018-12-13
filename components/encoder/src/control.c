@@ -517,6 +517,11 @@ void control_get_config_device_info(char const **phostname, uint16_t *pport, uin
     }
 }
 
+uint32_t control_get_config_sensor_id(void)
+{
+    return device_ident.device_id;
+}
+
 void control_task_signal_ble_ready(void)
 {
     xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_BLE_READY);
