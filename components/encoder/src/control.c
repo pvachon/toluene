@@ -4,6 +4,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "driver/gpio.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -46,6 +48,7 @@ EventGroupHandle_t _control_task_events;
 
 #define CONFIG_TRACKER_MAX_MEM                      (100 * 1024)
 #define CONFIG_CONTROL_TIMER_INTERVAL               (300ull * 1000ull * 1000ull)
+#define CONFIG_STATUS_LED_GPIO                      21
 
 enum control_state {
     CONTROL_STATE_IDLE,
@@ -99,6 +102,26 @@ esp_timer_create_args_t _control_timer_args = {
     .callback = _control_task_timer_fire,
     .name = "control-timer",
 };
+
+static
+void _clear_indicator_led(void)
+{
+    gpio_set_level(CONFIG_STATUS_LED_GPIO, 0);
+}
+
+void control_gpio_setup(void)
+{
+    gpio_config_t gpio_conf = {
+        .intr_type = GPIO_PIN_INTR_DISABLE,
+        .mode = GPIO_MODE_OUTPUT,
+        .pin_bit_mask = (1ul << CONFIG_STATUS_LED_GPIO),
+        .pull_down_en = 0,
+        .pull_up_en = 0,
+    };
+    gpio_config(&gpio_conf);
+
+    gpio_set_level(CONFIG_STATUS_LED_GPIO, 1);
+}
 
 static
 void _control_task_thread(void *p)
@@ -269,6 +292,7 @@ void _control_task_thread(void *p)
 
         if (bits & CONTROL_TASK_STATUS_NTP_ACQUIRED) {
             ESP_LOGI(TAG, "====> STATUS: We have NTP time!");
+            _clear_indicator_led();
             if (_control_state == CONTROL_STATE_WAIT_GET_NTP) {
                 _control_state = CONTROL_STATE_WIFI_CONNECTED;
             }

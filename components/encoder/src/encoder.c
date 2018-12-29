@@ -228,6 +228,10 @@ int ble_object_add_service(struct ble_object *obj, struct ble_service **pservice
 
     *pservice = service;
 
+    /* Mark that we have interrogated this device */
+    obj->dev.has_interrogated = 1;
+    obj->dev.interrogated = 1;
+
     ret = 0;
 done:
     if (0 != ret) {
