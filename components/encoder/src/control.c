@@ -47,7 +47,7 @@ EventGroupHandle_t _control_task_events;
 #define CONTROL_TASK_STATUS_NTP_ACQUIRED            (1 << 11)
 
 #define CONFIG_TRACKER_MAX_MEM                      (100 * 1024)
-#define CONFIG_CONTROL_TIMER_INTERVAL               (30ull * 1000ull * 1000ull)
+#define CONFIG_CONTROL_TIMER_INTERVAL               (300ull * 1000ull * 1000ull)
 #define CONFIG_STATUS_LED_GPIO                      21
 
 enum control_state {
