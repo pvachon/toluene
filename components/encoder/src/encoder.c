@@ -431,18 +431,22 @@ int ble_object_serialize(struct ble_object *obj, uint8_t **pserialized, size_t *
 
     ESP_LOGI(TAG, "Packing object -- length is %zu bytes", packed);
 
-    if (NULL == (serialized = proto_malloc(packed))) {
+    if (NULL == (serialized = proto_malloc(packed + 2))) {
         ESP_LOGE(TAG, "Failed to allocate memory to pack object into, aborting.");
         goto done;
     }
 
-    if (packed != ble_device__pack(&obj->dev, serialized)) {
+    /* Pack the length of the protobuf into the first two bytes */
+    uint16_t *header = (uint16_t *)serialized;
+    *header = packed;
+
+    if (packed != ble_device__pack(&obj->dev, serialized + 2)) {
         ESP_LOGE(TAG, "Packing message failed, length mismatch.");
         goto done;
     }
 
     *pserialized = serialized;
-    *pserialized_len = packed;
+    *pserialized_len = packed + 2;
 
     ret = 0;
 done:
