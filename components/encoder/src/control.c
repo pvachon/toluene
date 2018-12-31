@@ -109,6 +109,12 @@ void _clear_indicator_led(void)
     gpio_set_level(CONFIG_STATUS_LED_GPIO, 0);
 }
 
+static
+void _set_indicator_led(void)
+{
+    gpio_set_level(CONFIG_STATUS_LED_GPIO, 1);
+}
+
 void control_gpio_setup(void)
 {
     gpio_config_t gpio_conf = {
@@ -272,6 +278,7 @@ void _control_task_thread(void *p)
 
         if (bits & CONTROL_TASK_STATUS_WIFI_FAILURE) {
             ESP_LOGE(TAG, "====> STATUS: Wifi connectivity failure");
+            _set_indicator_led();
             uploader_shutdown();
             size_t mem_used = device_tracker_nr_bytes_used(NULL);
 
@@ -316,6 +323,37 @@ void control_task_init(void)
     }
 }
 
+#define IDENTITY_CSR_LENGTH_MAX         512
+
+static
+int _control_generate_device_csr(nvs_handle hdl, uint8_t *pem_csr, size_t pem_csr_len)
+{
+    int ret = -1;
+
+    uint8_t ident_key[IDENTITY_KEY_LENGTH_MAX];
+    size_t ident_key_len = 0;
+
+    if (NULL == pem_csr || 0 == pem_csr_len) {
+        ESP_LOGE(TAG, "FATAL: missing blob receive parameters... programmer error");
+        abort();
+    }
+
+    if (identity_generate_ident_key_csr(ident_key, IDENTITY_KEY_LENGTH_MAX, &ident_key_len, pem_csr, pem_csr_len)) {
+        ESP_LOGE(TAG, "FATAL: An error occurred while generating the identity key pair and CSR, aborting.");
+        goto done;
+    }
+
+    /* Store the identity key in NVS */
+    if (ESP_OK != nvs_set_blob(hdl, "identity_key", ident_key, IDENTITY_KEY_LENGTH_MAX)){
+        ESP_LOGE(TAG, "Failed to write identity_key blob to NVS, aborting.");
+        abort();
+    }
+
+    ret = 0;
+done:
+    return ret;
+}
+
 static
 void _control_config_init(struct identity *ident)
 {
@@ -324,6 +362,7 @@ void _control_config_init(struct identity *ident)
     uint32_t header = 0;
     uint16_t length = 0;
     uint8_t *body = NULL;
+    uint8_t csr_pem[IDENTITY_CSR_LENGTH_MAX];
 
     esp_err_t err = ESP_OK;
 
@@ -342,7 +381,17 @@ void _control_config_init(struct identity *ident)
         abort();
     }
 
-    ESP_LOGI(TAG, "Waiting for identity blob.");
+    ESP_LOGI(TAG, "Generating device identity key and CSR");
+
+    memset(csr_pem, 0, sizeof(csr_pem));
+    if (_control_generate_device_csr(hdl, csr_pem, IDENTITY_CSR_LENGTH_MAX)) {
+        ESP_LOGE(TAG, "Fatal, failed to generate a device identity key, aborting.");
+        abort();
+    }
+
+    printf("\n\n%s\n\n", csr_pem);
+
+    ESP_LOGI(TAG, "Waiting for identity blob in response.");
 
 #define CONTROL_CONFIG_HEADER           0xbebafeca
 
@@ -431,45 +480,87 @@ void _control_config_init(struct identity *ident)
 }
 
 static
+int __control_load_nvs_blob(nvs_handle hdl, char const *key, uint8_t **pvalue, size_t *plen, size_t max_len)
+{
+    int ret = -1;
+
+    size_t len = 0;
+    void *value = NULL;
+
+    if (NULL == pvalue || NULL == plen) {
+        ESP_LOGE(TAG, "Value, length are null, programmer error");
+        abort();
+    }
+
+    *pvalue = NULL;
+    *plen = 0;
+
+    if (ESP_OK != nvs_get_blob(hdl, key, NULL, &len)) {
+        ESP_LOGE(TAG, "Failed to get NVS key %s, aborting", key);
+        goto done;
+    }
+
+    if (0 == len || len > max_len) {
+        ESP_LOGE(TAG, "Invalid blob length. Got %zu, max is %zu.", len, max_len);
+        goto done;
+    }
+
+    if (NULL == (value = malloc(len))) {
+        ESP_LOGE(TAG, "Out of memory, unable to allocate %zu bytes.", len);
+        goto done;
+    }
+
+    if (ESP_OK != nvs_get_blob(hdl, key, value, &len)) {
+        ESP_LOGE(TAG, "Failed to read value from NVS key %s, aborting", key);
+        goto done;
+    }
+
+    *pvalue = value;
+    *plen = len;
+
+    ret = 0;
+done:
+    if (0 != ret) {
+        if (NULL != value) {
+            free(value);
+            value = NULL;
+        }
+    }
+    return ret;
+}
+
+static
 int _control_config_load(struct identity *ident)
 {
     int ret = -1;
 
-    size_t length = 0;
-    uint8_t *blob = NULL;
+    size_t ident_len = 0,
+           key_len = 0;
+    uint8_t *ident_raw = NULL,
+            *key_raw = NULL;
     nvs_handle hdl;
-
-    if (ESP_OK != nvs_open("huffer", NVS_READONLY, &hdl)) {
-        ESP_LOGE(TAG, "Configuration partition does not exist, aborting.");
-        goto done_empty;
-    }
 
     if (NULL == ident) {
         ESP_LOGE(TAG, "Programmer error, identity is NULL, aborting.");
         abort();
     }
 
-    if (ESP_OK != nvs_get_blob(hdl, "identity", NULL, &length)) {
-        ESP_LOGE(TAG, "Failed to get identity blob, aborting.");
+    if (ESP_OK != nvs_open("huffer", NVS_READONLY, &hdl)) {
+        ESP_LOGE(TAG, "Configuration partition does not exist, aborting.");
+        goto done_empty;
+    }
+
+    if (__control_load_nvs_blob(hdl, "identity", &ident_raw, &ident_len, IDENTITY_BLOB_LENGTH_MAX)) {
+        ESP_LOGE(TAG, "Fatal error while loading identity blob, aborting.");
         goto done;
     }
 
-    if (0 == length || length > IDENTITY_BLOB_LENGTH_MAX) {
-        ESP_LOGE(TAG, "Malformed identity blob, aborting.");
+    if (__control_load_nvs_blob(hdl, "deviceKey", &key_raw, &key_len, IDENTITY_KEY_LENGTH_MAX)) {
+        ESP_LOGE(TAG, "Fata error while loading device identity key, aborting.");
         goto done;
     }
 
-    if (NULL == (blob = malloc(length))) {
-        ESP_LOGE(TAG, "Out of memory for identity blob, aborting.");
-        abort();
-    }
-
-    if (ESP_OK != nvs_get_blob(hdl, "identity", blob, &length))  {
-        ESP_LOGE(TAG, "Unable to read identity blob, aborting.");
-        goto done;
-    }
-
-    if (identity_read(ident, blob, length)) {
+    if (identity_read(ident, ident_raw, ident_len)) {
         ESP_LOGE(TAG, "Failed to validate and decode identity blob, aborting.");
         goto done;
     }
@@ -480,7 +571,19 @@ int _control_config_load(struct identity *ident)
 done:
     nvs_close(hdl);
 
+    if (NULL != ident_raw) {
+        free(ident_raw);
+        ident_raw = NULL;
+    }
+
+    if (NULL != key_raw) {
+        free(key_raw);
+        key_raw = NULL;
+    }
+
     if (0 != ret) {
+        ESP_LOGE(TAG, "Fatal error while loading configuration, resetting.");
+
         if (ESP_OK != nvs_open("huffer", NVS_READWRITE, &hdl)) {
             ESP_LOGE(TAG, "Failed to reopen partition as read/write");
             abort();

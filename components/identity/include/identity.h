@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #define IDENTITY_BLOB_LENGTH_MAX            4096
+#define IDENTITY_KEY_LENGTH_MAX             128
 #define IDENTITY_ESSID_LEN_MAX              64
 #define IDENTITY_PASSWORD_LEN_MAX           64
 #define IDENTITY_TARGET_HOST_LEN_MAX        128
@@ -50,4 +51,17 @@ struct identity {
  * \return 0 on success, an error code otherwise.
  */
 int identity_read(struct identity *pident, void *bundle, size_t bundle_length);
+
+/**
+ * Generate the device's identity key, and a CSR representing that identity.
+ *
+ * \param ident_key The identity private key, memory to receive it
+ * \param ident_key_len The length of the identity private key memory region
+ * \param pident_key_len The length of the identity key as serialized
+ * \param ident_csr The identity CSR, stored as PEM, memory to receive it
+ * \param ident_csr_len The identity CSR's memory region length
+ *
+ * \return 0 on success, -1 on failure.
+ */
+int identity_generate_ident_key_csr(uint8_t *ident_key, size_t ident_key_max, size_t *pident_key_len, uint8_t *ident_csr, size_t ident_csr_len);
 

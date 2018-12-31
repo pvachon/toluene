@@ -31,12 +31,14 @@ DeviceIdentityInfo ::= SEQUENCE {
     -- Our unique device identifier
     deviceId INTEGER,
 
+    -- The server's CA root certificate, used to identify the host we're connecting to
+    serverCaRoot OCTET STRING,
+
     -- The identity certificate chain for this device. This is an array of certificates,
     -- the first being the certificate representing the device, all the way up to the
     -- root. The root must match one of the trusted roots for the device.
-
     -- Optional for now.
-    identityCertChain SEQUENCE OF BIT STRING OPTIONAL
+    identityCertChain SEQUENCE OF OCTET STRING
 }
 
 -- A signed bundle containing all the important identity information for this device

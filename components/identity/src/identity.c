@@ -7,10 +7,109 @@
 #include <mbedtls/sha256.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/asn1.h>
+#include <mbedtls/x509_csr.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/ctr_drbg.h>
 
 #include <string.h>
 
 #define TAG                         "IDENT"
+
+static
+const char key_magic[] = "iheartmermer";
+
+#define IDENTITY_EC_GROUP       MBEDTLS_ECP_DP_SECP256R1
+#define IDENTITY_SIG_MD         MBEDTLS_MD_SHA256
+
+int identity_generate_ident_key_csr(uint8_t *ident_key, size_t ident_key_max, size_t *pident_key_len, uint8_t *ident_csr, size_t ident_csr_len)
+{
+    int ret = -1;
+
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_pk_context key_pair;
+    mbedtls_x509write_csr csr;
+
+    mbedtls_pk_init(&key_pair);
+    mbedtls_entropy_init(&entropy);
+    mbedtls_ctr_drbg_init(&ctr_drbg);
+    mbedtls_x509write_csr_init(&csr);
+
+    /* Make sure we have some sane inputs */
+    if (NULL == ident_key || IDENTITY_KEY_LENGTH_MAX > ident_key_max || NULL == pident_key_len || NULL == ident_csr || 0 == ident_csr_len) {
+        goto done;
+    }
+
+    ESP_LOGI(TAG, "Setting up RNG");
+
+    /* Initialize the system entropy source */
+    if (0 != mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, (uint8_t const *)key_magic, sizeof(key_magic))) {
+        ESP_LOGE(TAG, "Failed to initialize DRBG state, aborting.");
+        goto done;
+    }
+
+    /* Generate the device identity key */
+    ESP_LOGI(TAG, "Setting up Device Identity Key generator");
+    if (0 != mbedtls_pk_setup(&key_pair, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY))) {
+        ESP_LOGE(TAG, "failed to initialize PK context, aborting.");
+        goto done;
+    }
+
+    if (mbedtls_pk_get_type(&key_pair) != MBEDTLS_PK_ECKEY) {
+        ESP_LOGE(TAG, "Bug in PK context");
+        goto done;
+    }
+
+    if (0 != mbedtls_ecp_gen_key(IDENTITY_EC_GROUP, mbedtls_pk_ec(key_pair), mbedtls_ctr_drbg_random, &ctr_drbg)) {
+        ESP_LOGE(TAG, "Failed to generate a unique key pair, aborting.");
+        goto done;
+    }
+
+    /* Serialize the identity key, so it can be permanently stored */
+    ESP_LOGI(TAG, "Serializing Device Identity Key");
+    int sret = 0;
+    if (0 >= (sret = mbedtls_pk_write_key_der(&key_pair, ident_key, ident_key_max))) {
+        ESP_LOGE(TAG, "Failed to serialize private key, aborting (reason = -0x%04x)", (unsigned)-sret);
+        goto done;
+    }
+    *pident_key_len = sret;
+
+    /* Generate a CSR using the device identity key */
+    if (0 != mbedtls_x509write_csr_set_subject_name(&csr, "hoover")) {
+        ESP_LOGE(TAG, "Failed to set subject name, aborting.");
+        goto done;
+    }
+
+    mbedtls_x509write_csr_set_md_alg(&csr, IDENTITY_SIG_MD);
+    mbedtls_x509write_csr_set_key(&csr, &key_pair);
+
+    if (0 != mbedtls_x509write_csr_set_key_usage(&csr,
+        MBEDTLS_X509_KU_DIGITAL_SIGNATURE | MBEDTLS_X509_KU_KEY_ENCIPHERMENT |
+        MBEDTLS_X509_KU_DATA_ENCIPHERMENT | MBEDTLS_X509_KU_KEY_AGREEMENT)
+    ) {
+        ESP_LOGE(TAG, "Failed to set CSR key usage, aborting.");
+        goto done;
+    }
+
+    if (0 != mbedtls_x509write_csr_set_ns_cert_type(&csr, MBEDTLS_X509_NS_CERT_TYPE_SSL_CLIENT)) {
+        ESP_LOGE(TAG, "Failed to set CSR Netscape Certificate Type");
+        goto done;
+    }
+
+    if (0 != mbedtls_x509write_csr_pem(&csr, ident_csr, ident_csr_len, mbedtls_ctr_drbg_random, &ctr_drbg)) {
+        ESP_LOGE(TAG, "Failed to write out PEM-encoded CSR, aborting.");
+        goto done;
+    }
+
+    ret = 0;
+done:
+    mbedtls_x509write_csr_free(&csr);
+    mbedtls_ctr_drbg_free(&ctr_drbg);
+    mbedtls_entropy_free(&entropy);
+    mbedtls_pk_free(&key_pair);
+
+    return ret;
+}
 
 static
 int _identity_check_signature(void const *message, size_t length, mbedtls_mpi const *r, mbedtls_mpi const *s, bool *pverify)
@@ -32,9 +131,19 @@ int _identity_check_signature(void const *message, size_t length, mbedtls_mpi co
 
     *pverify = false;
 
+    ESP_LOGI(TAG, "Identity Bundle Raw DER");
+    ESP_LOG_BUFFER_HEXDUMP(TAG, message, length, ESP_LOG_INFO);
+
+    ESP_LOGI(TAG, "Hashing %zu bytes for identity bundle", length);
+
     /* Load the trusted public key so we can verify the identity blob */
     if (mbedtls_pk_parse_public_key(&pk_ctx, pem_pub_key, sizeof(pem_pub_key))) {
         ESP_LOGE(TAG, "Failed to load the trusted public key, aborting.");
+        goto done;
+    }
+
+    if (mbedtls_pk_get_type(&pk_ctx) != MBEDTLS_PK_ECKEY) {
+        ESP_LOGE(TAG, "Trusted key is not an EC key pair, aborting.");
         goto done;
     }
 
@@ -58,6 +167,9 @@ int _identity_check_signature(void const *message, size_t length, mbedtls_mpi co
         ESP_LOGE(TAG, "Failed to finalize SHA256, aborting.");
         goto done;
     }
+
+    ESP_LOGI(TAG, "Hash");
+    ESP_LOG_BUFFER_HEXDUMP(TAG, hash, 32, ESP_LOG_INFO);
 
     /* Verify the signature */
     if (mbedtls_ecdsa_verify(&kp->grp, hash, 32, &kp->Q, r, s)) {
@@ -97,7 +209,7 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
 
     /* Extract the parameters */
     if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &essid_len, MBEDTLS_ASN1_UTF8_STRING)) {
-        ESP_LOGE(TAG, "Failed to get ESSID tag, abortig.");
+        ESP_LOGE(TAG, "Failed to get ESSID tag, aborting.");
         goto done;
     }
 
@@ -202,12 +314,17 @@ int identity_read(struct identity *pident, void *bundle, size_t bundle_length)
 
     /* Grab outer info sequence */
     int asnret = 0;
+    info_blob = bndl_p;
     if ((asnret = mbedtls_asn1_get_tag(&bndl_p, bndl_end, &info_blob_len, MBEDTLS_ASN1_SEQUENCE | MBEDTLS_ASN1_CONSTRUCTED))) {
         ESP_LOGI(TAG, "Failed to get info bundle tag, aborting. (got %d)", asnret);
         goto done;
     }
-    info_blob = bndl_p;
+
+    /* Gymnastics to get the outer tag for the bundle */
+    size_t info_blob_delta = bndl_p - info_blob;
     bndl_p += info_blob_len;
+    info_blob_len += info_blob_delta;
+    ESP_LOGI(TAG, "Tag length: %zu, bundle length %zu", info_blob_delta, info_blob_len);
 
     /* Grab outer signature sequence, and r, s */
     if (mbedtls_asn1_get_tag(&bndl_p, bndl_end, &sig_blob_len, MBEDTLS_ASN1_SEQUENCE | MBEDTLS_ASN1_CONSTRUCTED)) {
@@ -226,7 +343,7 @@ int identity_read(struct identity *pident, void *bundle, size_t bundle_length)
     }
 
     /* Verify the signature on the blob */
-    if (_identity_check_signature(info_blob - 2, info_blob_len + 2, &r, &s, &sig_result)) {
+    if (_identity_check_signature(info_blob, info_blob_len, &r, &s, &sig_result)) {
         ESP_LOGE(TAG, "Failed to verify signature (an internal error); aborting");
         goto done;
     }
