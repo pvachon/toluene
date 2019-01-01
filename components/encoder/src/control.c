@@ -338,15 +338,43 @@ int _control_generate_device_csr(nvs_handle hdl, uint8_t *pem_csr, size_t pem_cs
         abort();
     }
 
-    if (identity_generate_ident_key_csr(ident_key, IDENTITY_KEY_LENGTH_MAX, &ident_key_len, pem_csr, pem_csr_len)) {
-        ESP_LOGE(TAG, "FATAL: An error occurred while generating the identity key pair and CSR, aborting.");
-        goto done;
+    memset(ident_key, 0, sizeof(ident_key));
+
+    /* Try to grab the key */
+    if (ESP_OK != nvs_get_blob(hdl, "identity_key", NULL, &ident_key_len)) {
+        ESP_LOGI(TAG, "Notice: We're going to generate a new identity key.");
+
+        /* Generate the identity key */
+        if (ESP_OK != identity_generate_ident_key(ident_key, sizeof(ident_key), &ident_key_len)) {
+            ESP_LOGE(TAG, "Failed to generate identity key, aborting.");
+            abort();
+        }
+
+        /* Store the identity key in NVS */
+        if (ESP_OK != nvs_set_blob(hdl, "identity_key", ident_key, ident_key_len)){
+            ESP_LOGE(TAG, "Failed to write identity_key blob to NVS, aborting.");
+            abort();
+        }
+
+        if (ESP_OK != nvs_commit(hdl)) {
+            ESP_LOGE(TAG, "Failed to commit identity key to NVS, aborting.");
+            abort();
+        }
+    } else {
+        if (ident_key_len > IDENTITY_KEY_LENGTH_MAX) {
+            ESP_LOGE(TAG, "Identity key longer than expected, aborting.");
+            abort();
+        }
+
+        if (ESP_OK != nvs_get_blob(hdl, "identity_key", ident_key, &ident_key_len)) {
+            ESP_LOGE(TAG, "Failed to retrieve identity key, aborting.");
+            abort();
+        }
     }
 
-    /* Store the identity key in NVS */
-    if (ESP_OK != nvs_set_blob(hdl, "identity_key", ident_key, IDENTITY_KEY_LENGTH_MAX)){
-        ESP_LOGE(TAG, "Failed to write identity_key blob to NVS, aborting.");
-        abort();
+    if (identity_generate_ident_key_csr(ident_key, ident_key_len, pem_csr, pem_csr_len)) {
+        ESP_LOGE(TAG, "FATAL: An error occurred while generating the identity key pair and CSR, aborting.");
+        goto done;
     }
 
     ret = 0;
@@ -385,7 +413,7 @@ void _control_config_init(struct identity *ident)
 
     memset(csr_pem, 0, sizeof(csr_pem));
     if (_control_generate_device_csr(hdl, csr_pem, IDENTITY_CSR_LENGTH_MAX)) {
-        ESP_LOGE(TAG, "Fatal, failed to generate a device identity key, aborting.");
+        ESP_LOGE(TAG, "Fatal, failed to generate a device identity key and CSR, aborting.");
         abort();
     }
 
@@ -555,7 +583,7 @@ int _control_config_load(struct identity *ident)
         goto done;
     }
 
-    if (__control_load_nvs_blob(hdl, "deviceKey", &key_raw, &key_len, IDENTITY_KEY_LENGTH_MAX)) {
+    if (__control_load_nvs_blob(hdl, "identity_key", &key_raw, &key_len, IDENTITY_KEY_LENGTH_MAX)) {
         ESP_LOGE(TAG, "Fata error while loading device identity key, aborting.");
         goto done;
     }

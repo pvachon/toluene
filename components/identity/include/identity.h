@@ -53,15 +53,23 @@ struct identity {
 int identity_read(struct identity *pident, void *bundle, size_t bundle_length);
 
 /**
- * Generate the device's identity key, and a CSR representing that identity.
+ * Given the device's identity key, generate a CSR representing that identity.
  *
- * \param ident_key The identity private key, memory to receive it
- * \param ident_key_len The length of the identity private key memory region
- * \param pident_key_len The length of the identity key as serialized
+ * \param ident_key The identity private key, serialized as DER
+ * \param ident_key_len The length of the identity key as serialized
  * \param ident_csr The identity CSR, stored as PEM, memory to receive it
  * \param ident_csr_len The identity CSR's memory region length
  *
  * \return 0 on success, -1 on failure.
  */
-int identity_generate_ident_key_csr(uint8_t *ident_key, size_t ident_key_max, size_t *pident_key_len, uint8_t *ident_csr, size_t ident_csr_len);
+int identity_generate_ident_key_csr(uint8_t *ident_key, size_t ident_key_len, uint8_t *ident_csr, size_t ident_csr_len);
+
+/**
+ * Generate the device's identity key.
+ *
+ * \param ident_key_der The identity key, serialized as DER.
+ * \param ident_key_max The size of the buffer to receive the identity key.
+ * \param pident_key_len The actual length of the serialized DER key.
+ */
+int identity_generate_ident_key(uint8_t *ident_key_der, size_t ident_key_max, size_t *pident_key_len);
 

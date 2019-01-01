@@ -20,6 +20,9 @@
 #include "esp_vfs_dev.h"
 #include "driver/uart.h"
 
+#include "rom/uart.h"
+#include "esp_clk.h"
+
 #include "freertos/FreeRTOS.h"
 
 #define TAG                         "HUFFER"
@@ -385,6 +388,8 @@ void esp_gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_ga
 
 void setup_uart(void)
 {
+    uint32_t baud = 0;
+
     setvbuf(stdin, NULL, _IONBF, 0);
 
     const uart_config_t uart_config = {
@@ -395,9 +400,15 @@ void setup_uart(void)
         .use_ref_tick = true
     };
 
+    ESP_ERROR_CHECK(uart_get_baudrate(CONFIG_CONSOLE_UART_NUM, &baud));
+    ESP_LOGI(TAG, "Uart baud rate before: %u (APB freq: %u)", baud, esp_clk_apb_freq());
+
 	ESP_ERROR_CHECK(uart_param_config(CONFIG_CONSOLE_UART_NUM, &uart_config));
     ESP_ERROR_CHECK(uart_driver_install(CONFIG_CONSOLE_UART_NUM, 512, 0, 0, NULL, 0));
     esp_vfs_dev_uart_use_driver(CONFIG_CONSOLE_UART_NUM);
+
+    ESP_ERROR_CHECK(uart_get_baudrate(CONFIG_CONSOLE_UART_NUM, &baud));
+    ESP_LOGI(TAG, "Uart baud rate after: %u", baud);
 }
 
 void app_main(void)

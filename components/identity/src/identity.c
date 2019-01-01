@@ -21,22 +21,22 @@ const char key_magic[] = "iheartmermer";
 #define IDENTITY_EC_GROUP       MBEDTLS_ECP_DP_SECP256R1
 #define IDENTITY_SIG_MD         MBEDTLS_MD_SHA256
 
-int identity_generate_ident_key_csr(uint8_t *ident_key, size_t ident_key_max, size_t *pident_key_len, uint8_t *ident_csr, size_t ident_csr_len)
+int identity_generate_ident_key(uint8_t *ident_key_der, size_t ident_key_max, size_t *pident_key_len)
 {
     int ret = -1;
+
+    uint8_t ident_key[IDENTITY_KEY_LENGTH_MAX];
 
     mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_context ctr_drbg;
     mbedtls_pk_context key_pair;
-    mbedtls_x509write_csr csr;
 
     mbedtls_pk_init(&key_pair);
     mbedtls_entropy_init(&entropy);
     mbedtls_ctr_drbg_init(&ctr_drbg);
-    mbedtls_x509write_csr_init(&csr);
 
     /* Make sure we have some sane inputs */
-    if (NULL == ident_key || IDENTITY_KEY_LENGTH_MAX > ident_key_max || NULL == pident_key_len || NULL == ident_csr || 0 == ident_csr_len) {
+    if (NULL == ident_key_der || IDENTITY_KEY_LENGTH_MAX > ident_key_max || NULL == pident_key_len) {
         goto done;
     }
 
@@ -68,11 +68,64 @@ int identity_generate_ident_key_csr(uint8_t *ident_key, size_t ident_key_max, si
     /* Serialize the identity key, so it can be permanently stored */
     ESP_LOGI(TAG, "Serializing Device Identity Key");
     int sret = 0;
-    if (0 >= (sret = mbedtls_pk_write_key_der(&key_pair, ident_key, ident_key_max))) {
+    if (0 >= (sret = mbedtls_pk_write_key_der(&key_pair, ident_key, IDENTITY_KEY_LENGTH_MAX))) {
         ESP_LOGE(TAG, "Failed to serialize private key, aborting (reason = -0x%04x)", (unsigned)-sret);
         goto done;
     }
+
+    memcpy(ident_key_der, ident_key + (IDENTITY_KEY_LENGTH_MAX - sret), sret);
+
     *pident_key_len = sret;
+
+    ESP_LOGI(TAG, "Device identity key is %d bytes", sret);
+
+    ret = 0;
+done:
+    mbedtls_ctr_drbg_free(&ctr_drbg);
+    mbedtls_entropy_free(&entropy);
+    mbedtls_pk_free(&key_pair);
+
+    return ret;
+}
+
+int identity_generate_ident_key_csr(uint8_t *ident_key, size_t ident_key_len, uint8_t *ident_csr, size_t ident_csr_len)
+{
+    int ret = -1;
+
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_pk_context key_pair;
+    mbedtls_x509write_csr csr;
+
+    mbedtls_pk_init(&key_pair);
+    mbedtls_entropy_init(&entropy);
+    mbedtls_ctr_drbg_init(&ctr_drbg);
+    mbedtls_x509write_csr_init(&csr);
+
+    /* Make sure we have some sane inputs */
+    if (NULL == ident_key || 0 == ident_key_len || NULL == ident_csr || 0 == ident_csr_len) {
+        goto done;
+    }
+
+    ESP_LOGI(TAG, "Setting up RNG");
+
+    /* Initialize the system entropy source */
+    if (0 != mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, (uint8_t const *)key_magic, sizeof(key_magic))) {
+        ESP_LOGE(TAG, "Failed to initialize DRBG state, aborting.");
+        goto done;
+    }
+
+    /* Parse the provided DER encoded device identity key */
+    int pret = 0;
+    if ((pret = mbedtls_pk_parse_key(&key_pair, ident_key, ident_key_len, NULL, 0))) {
+        ESP_LOGE(TAG, "Failed to parse DER encoded key (reason: -%04x), aborting.", (unsigned)-pret);
+        goto done;
+    }
+
+    if (MBEDTLS_PK_ECKEY != mbedtls_pk_get_type(&key_pair)) {
+        ESP_LOGE(TAG, "Provided device private key is invalid; it should be an EC key, aborting.");
+        goto done;
+    }
 
     /* Generate a CSR using the device identity key */
     if (0 != mbedtls_x509write_csr_set_subject_name(&csr, "hoover")) {
@@ -131,11 +184,6 @@ int _identity_check_signature(void const *message, size_t length, mbedtls_mpi co
 
     *pverify = false;
 
-    ESP_LOGI(TAG, "Identity Bundle Raw DER");
-    ESP_LOG_BUFFER_HEXDUMP(TAG, message, length, ESP_LOG_INFO);
-
-    ESP_LOGI(TAG, "Hashing %zu bytes for identity bundle", length);
-
     /* Load the trusted public key so we can verify the identity blob */
     if (mbedtls_pk_parse_public_key(&pk_ctx, pem_pub_key, sizeof(pem_pub_key))) {
         ESP_LOGE(TAG, "Failed to load the trusted public key, aborting.");
@@ -168,9 +216,6 @@ int _identity_check_signature(void const *message, size_t length, mbedtls_mpi co
         goto done;
     }
 
-    ESP_LOGI(TAG, "Hash");
-    ESP_LOG_BUFFER_HEXDUMP(TAG, hash, 32, ESP_LOG_INFO);
-
     /* Verify the signature */
     if (mbedtls_ecdsa_verify(&kp->grp, hash, 32, &kp->Q, r, s)) {
         ESP_LOGE(TAG, "Failed to verify signature, aborting.");
@@ -198,12 +243,19 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
 
     size_t essid_len = 0,
            wpa_psk_len = 0,
-           target_host_len = 0;
+           target_host_len = 0,
+           blob_len = 0;
     int target_host_port = -1,
         device_id = -1;
 
     if (NULL == info_blob || 0 == info_blob_len) {
         ESP_LOGE(TAG, "Invalid arguments, aborting.");
+        goto done;
+    }
+
+    /* Advance past the initial tag */
+    if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &blob_len, MBEDTLS_ASN1_SEQUENCE | MBEDTLS_ASN1_CONSTRUCTED)) {
+        ESP_LOGE(TAG, "Outer identity blob tag is malformed, aborting.");
         goto done;
     }
 

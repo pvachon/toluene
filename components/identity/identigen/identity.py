@@ -23,13 +23,15 @@ import io
 import hexdump
 
 def uart_read_csr(ser):
-    sio = io.TextIOWrapper(io.BufferedRWPair(ser, ser), newline=None)
+    sio = io.TextIOWrapper(io.BufferedRWPair(ser, ser), newline=None, errors='replace')
     csr = ''
 
     in_csr = False
 
     while True:
-        l = sio.readline().strip()
+        l = sio.readline()
+
+        l = l.strip()
 
         if l:
             print('{}'.format(l))
@@ -163,7 +165,7 @@ def main():
         'targetHost' : args.host,
         'targetPort' : args.port,
         'deviceId' : args.device_id,
-        'serverCaRoot' : b'',
+        'serverCaRoot' : b'foobarbaz',
         'identityCertChain' : ident_certs,
     }
 
@@ -174,13 +176,11 @@ def main():
     di = der_encoder(di_raw)
 
     hexdump.hexdump(di)
-
     r, s = decode_dss_signature(pk.sign(di, ec.ECDSA(hashes.SHA256())))
     hashctx = hashes.Hash(hashes.SHA256(), default_backend())
     hashctx.update(di)
-    digest = hashctx.finalize()
     logging.info('Digest:')
-    hexdump.hexdump(digest)
+    hexdump.hexdump(hashctx.finalize())
 
     logging.debug('Device Identity Blob length: {}'.format(len(di)))
     logging.debug('Signature = ({}, {})'.format(r, s))
