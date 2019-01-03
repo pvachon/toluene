@@ -10,7 +10,6 @@ void control_task_signal_ble_ready(void);
 void control_task_signal_ble_gatt_disconnect(void);
 void control_task_signal_ble_scan_started(void);
 void control_task_signal_ble_scan_complete(void);
-void control_task_signal_ble_scan_paused(void);
 
 void control_task_signal_wifi_up(void);
 void control_task_signal_wifi_done(void);
@@ -18,6 +17,9 @@ void control_task_signal_wifi_failure(void);
 void control_task_signal_wifi_down(void);
 
 void control_task_signal_ntp_done(void);
+
+void control_task_signal_ble_hoover_start(void);
+void control_task_signal_ble_hoover_finished(void);
 
 /* Get configuration parameters */
 void control_get_config_wifi(char *essid, char *password);

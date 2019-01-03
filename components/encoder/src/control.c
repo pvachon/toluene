@@ -40,21 +40,29 @@ EventGroupHandle_t _control_task_events;
 #define CONTROL_TASK_STATUS_WIFI_DONE               (1 << 4)
 #define CONTROL_TASK_STATUS_BLE_SCAN_TIMEOUT        (1 << 5)
 #define CONTROL_TASK_STATUS_BLE_READY               (1 << 6)
-#define CONTROL_TASK_STATUS_BLE_STOPPED             (1 << 7)
+
 #define CONTROL_TASK_STATUS_BLE_SCAN_START_REQUEST  (1 << 8)
 #define CONTROL_TASK_STATUS_WIFI_FAILURE            (1 << 9)
 #define CONTROL_TASK_STATUS_WIFI_DOWN               (1 << 10)
 #define CONTROL_TASK_STATUS_NTP_ACQUIRED            (1 << 11)
+#define CONTROL_TASK_STATUS_BLE_HOOVER_START        (1 << 12)
+#define CONTROL_TASK_STATUS_BLE_HOOVER_FINISHED     (1 << 13)
 
 #define CONFIG_TRACKER_MAX_MEM                      (100 * 1024)
 #define CONFIG_CONTROL_TIMER_INTERVAL               (300ull * 1000ull * 1000ull)
 #define CONFIG_STATUS_LED_GPIO                      21
 
+#define CONTROL_CONFIG_HEADER                       0xbebafeca
+
+extern void hoover_wake(void);
+
 enum control_state {
     CONTROL_STATE_IDLE,
     CONTROL_STATE_RUNNING_BLE_SCAN,
-    CONTROL_STATE_PAUSED_BLE_SCAN,
     CONTROL_STATE_SHUTTING_DOWN_BLE_SCAN,
+    CONTROL_STATE_BLE_HOOVERING_STARTING,
+    CONTROL_STATE_BLE_HOOVERING_RUNNING,
+    CONTROL_STATE_BLE_HOOVERING_FINISHED,
     CONTROL_STATE_WIFI_CONNECTING,
     CONTROL_STATE_WIFI_CONNECTED,
     CONTROL_STATE_WIFI_SHUTTING_DOWN,
@@ -94,6 +102,7 @@ void start_scan(void)
 static
 void _control_task_timer_fire(void *p)
 {
+    /* TODO: this should be a generic timeout set in each state */
     xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_BLE_SCAN_TIMEOUT);
 }
 
@@ -137,6 +146,8 @@ void _control_task_thread(void *p)
     size_t nr_backoffs = 0,
            ntp_failures = 0;
 
+    bool _wifi_start_requested = false;
+
     ESP_LOGI(TAG, "---- Control task started ---");
 
     if (ESP_OK != esp_timer_create(&_control_timer_args, &_control_timer)) {
@@ -157,11 +168,12 @@ void _control_task_thread(void *p)
                 CONTROL_TASK_STATUS_WIFI_DONE |
                 CONTROL_TASK_STATUS_BLE_SCAN_TIMEOUT |
                 CONTROL_TASK_STATUS_BLE_READY |
-                CONTROL_TASK_STATUS_BLE_STOPPED |
                 CONTROL_TASK_STATUS_BLE_SCAN_START_REQUEST |
                 CONTROL_TASK_STATUS_WIFI_FAILURE |
                 CONTROL_TASK_STATUS_WIFI_DOWN |
-                CONTROL_TASK_STATUS_NTP_ACQUIRED
+                CONTROL_TASK_STATUS_NTP_ACQUIRED |
+                CONTROL_TASK_STATUS_BLE_HOOVER_START |
+                CONTROL_TASK_STATUS_BLE_HOOVER_FINISHED
                 ,
                 pdTRUE,
                 pdFALSE,
@@ -183,41 +195,15 @@ void _control_task_thread(void *p)
             }
         }
 
+        /* We got to the end of the BLE scan interval */
         if (bits & CONTROL_TASK_STATUS_BLE_SCAN_TIMEOUT) {
-            if (_control_state == CONTROL_STATE_PAUSED_BLE_SCAN) {
-                /* Mark that the scan should not be resumed the next time the control thread is awoken by
-                 * the worker thread.
-                 */
-                ESP_LOGI(TAG, "====> STATUS: Scan timeout fired, request the pending scan is terminated");
-                _control_state = CONTROL_STATE_SHUTTING_DOWN_BLE_SCAN;
-            } else {
-                /* Request we terminate the scan */
-                ESP_LOGI(TAG, "====> STATUS: Shutting down BLE scan, time limit reached");
-                _control_state = CONTROL_STATE_SHUTTING_DOWN_BLE_SCAN;
-                esp_ble_gap_stop_scanning();
-            }
-        }
-
-        if (bits & CONTROL_TASK_STATUS_BLE_STOPPED) {
-            if (_control_state != CONTROL_STATE_SHUTTING_DOWN_BLE_SCAN) {
-                ESP_LOGI(TAG, "====> STATUS: BLE Scan Stopped for Interrogation");
-                _control_state = CONTROL_STATE_PAUSED_BLE_SCAN;
-            } else if (device_tracker_nr_devs(NULL) != 0) {
-                ESP_LOGI(TAG, "====> STATUS: BLE Scan has terminated, waking wifi");
-                _control_state = CONTROL_STATE_WIFI_CONNECTING;
-                uploader_connect();
-            } else {
-                ESP_LOGI(TAG, "====> STATUS: No devices found, skipping upload phase");
-                _control_state = CONTROL_STATE_RUNNING_BLE_SCAN;
-                esp_timer_start_once(_control_timer, CONFIG_CONTROL_TIMER_INTERVAL);
-                start_scan();
-            }
+            /* Indicate we should move on to forwarding data at the next state transition */
+            ESP_LOGI(TAG, "====> Requesting we transmit after we finish next hoover state");
+            _wifi_start_requested = true;
         }
 
         if (bits & CONTROL_TASK_STATUS_BLE_SCAN_START_REQUEST) {
-            if (_control_state == CONTROL_STATE_IDLE ||
-                    _control_state == CONTROL_STATE_PAUSED_BLE_SCAN)
-            {
+            if (_control_state == CONTROL_STATE_IDLE) {
                 ESP_LOGD(TAG, "====> STATUS: Scan start requested, starting");
                 start_scan();
             } else {
@@ -232,8 +218,35 @@ void _control_task_thread(void *p)
 
         if (bits & CONTROL_TASK_STATUS_BLE_FINISHED) {
             ESP_LOGI(TAG, "====> STATUS: BLE scan is finished, turning up the wifi");
-            _control_state = CONTROL_STATE_WIFI_CONNECTING;
-            uploader_connect();
+            _control_state = CONTROL_STATE_BLE_HOOVERING_STARTING;
+            hoover_wake();
+        }
+
+        if (bits & CONTROL_TASK_STATUS_BLE_HOOVER_START) {
+            if (_control_state != CONTROL_STATE_BLE_HOOVERING_STARTING) {
+                ESP_LOGE(TAG, "!!!! Panic: spurious notification of hoover having started");
+                abort();
+            }
+
+            _control_state = CONTROL_STATE_BLE_HOOVERING_RUNNING;
+        }
+
+        if (bits & CONTROL_TASK_STATUS_BLE_HOOVER_FINISHED) {
+            if (_control_state != CONTROL_STATE_BLE_HOOVERING_RUNNING) {
+                ESP_LOGE(TAG, "!!!! Panic: spurious notification of hoover having finished");
+                abort();
+            }
+
+            /* Check if we have devices to upload; if so, initiate the uploader process */
+            if (_wifi_start_requested == true && device_tracker_nr_devs(NULL) != 0) {
+                _wifi_start_requested = false;
+                _control_state = CONTROL_STATE_WIFI_CONNECTING;
+                uploader_connect();
+            } else {
+                /* Resume scanning. */
+                _control_state = CONTROL_STATE_RUNNING_BLE_SCAN;
+                start_scan();
+            }
         }
 
         if (bits & CONTROL_TASK_STATUS_WIFI_UP) {
@@ -257,7 +270,7 @@ void _control_task_thread(void *p)
             if (_control_state == CONTROL_STATE_WAIT_WIFI_DOWN ||
                     _control_state == CONTROL_STATE_WIFI_CONNECTING)
             {
-                ESP_LOGI(TAG, "===> STATUS: Got signal wifi is down");
+                ESP_LOGI(TAG, "===> STATUS: Got signal wifi is down, resuming BLE scan");
                 _control_state = CONTROL_STATE_RUNNING_BLE_SCAN;
                 esp_timer_start_once(_control_timer, CONFIG_CONTROL_TIMER_INTERVAL);
                 start_scan();
@@ -320,6 +333,7 @@ void control_task_init(void)
 
     if (pdPASS != ret) {
         ESP_LOGE(TAG, "Failed to create uploader worker task (result=%d)", ret);
+        abort();
     }
 }
 
@@ -420,8 +434,6 @@ void _control_config_init(struct identity *ident)
     printf("\n\n%s\n\n", csr_pem);
 
     ESP_LOGI(TAG, "Waiting for identity blob in response.");
-
-#define CONTROL_CONFIG_HEADER           0xbebafeca
 
     int fd = -1;
 
@@ -697,11 +709,6 @@ void control_task_signal_ble_scan_complete(void)
     xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_BLE_FINISHED);
 }
 
-void control_task_signal_ble_scan_paused(void)
-{
-    xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_BLE_STOPPED);
-}
-
 void control_task_signal_wifi_up(void)
 {
     xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_WIFI_UP);
@@ -725,5 +732,15 @@ void control_task_signal_wifi_failure(void)
 void control_task_signal_ntp_done(void)
 {
     xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_NTP_ACQUIRED);
+}
+
+void control_task_signal_ble_hoover_start(void)
+{
+    xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_BLE_HOOVER_START);
+}
+
+void control_task_signal_ble_hoover_finished(void)
+{
+    xEventGroupSetBits(_control_task_events, CONTROL_TASK_STATUS_BLE_HOOVER_FINISHED);
 }
 
