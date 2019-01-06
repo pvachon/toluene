@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event_loop.h"
+#include "esp_pm.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -367,13 +368,13 @@ int _uploader_deliver_device_info(mbedtls_ssl_context *ssl)
             goto done;
         }
 
+        ESP_LOGI(TAG, "Sent device %zu to the backend (length = %u)", record_id, (unsigned)dev->encoded_obj_len);
+
         /* Remove the device record, free any deeply-used memory */
         if (device_tracker_remove(&tracker, dev)) {
             ESP_LOGE(TAG, "Unexpected failure while removing object, aborting.");
             abort();
         }
-
-        ESP_LOGI(TAG, "Sent device %zu to the backend (length = %u)", record_id, (unsigned)dev->encoded_obj_len);
 
         /* Free the device itself */
         free(dev);
@@ -416,9 +417,9 @@ void _uploader_terminate(int fd, mbedtls_ssl_context *ssl)
             ESP_LOGE(TAG, "A fatal error %d occurred during SSL shutdown, SSL shutdown will be unclean", shdn);
         }
         ESP_LOGI(TAG, "Waiting for remote end to shut down -- trying again");
-    } while (0 == shdn && shdn_count++ < 100);
+    } while (0 == shdn && shdn_count++ < 10);
 
-    if (shdn_count > 50) {
+    if (shdn_count >= 10) {
         ESP_LOGE(TAG, "Shutdown was likely not clean, we tried %d times over.", shdn_count);
     }
 
@@ -527,10 +528,15 @@ void _uploader_task(void *p)
                 mbedtls_ssl_context ssl;
                 mbedtls_net_context server_ctx;
 
+                /* Bump clock to maximum speed while negotiating TLS session */
+                esp_pm_lock_acquire(ESP_PM_CPU_FREQ_MAX);
+
                 mbedtls_ssl_init(&ssl);
                 mbedtls_net_init(&server_ctx);
 
                 if (0 != mbedtls_ssl_setup(&ssl, &tls_conf)) {
+                    /* Back to normal clock */
+                    esp_pm_lock_release(ESP_PM_CPU_FREQ_MAX);
                     ESP_LOGE(TAG, "Failed to set up SSL context, aborting.");
                     mbedtls_net_free(&server_ctx);
                     control_task_signal_wifi_failure();
@@ -539,12 +545,16 @@ void _uploader_task(void *p)
                 }
 
                 if (_uploader_connect(addr, port, &conn_fd, &tls_conf, &ssl, &server_ctx)) {
+                    /* Back to normal clock */
+                    esp_pm_lock_release(ESP_PM_CPU_FREQ_MAX);
                     ESP_LOGE(TAG, "Failed to connect to uploader target, aborting.");
                     mbedtls_net_free(&server_ctx);
                     control_task_signal_wifi_failure();
                     esp_wifi_disconnect();
                     continue;
                 }
+                /* Back to normal clock, now that we're done with setting up the TLS session */
+                esp_pm_lock_release(ESP_PM_CPU_FREQ_MAX);
 
                 if (_uploader_deliver_device_info(&ssl)) {
                     ESP_LOGE(TAG, "Failed to deliver device information to backend, aborting.");

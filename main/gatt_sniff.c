@@ -18,6 +18,7 @@
 #include "esp_gatt_common_api.h"
 #include "esp_log.h"
 #include "esp_vfs_dev.h"
+#include "esp_pm.h"
 #include "driver/uart.h"
 
 #include "freertos/FreeRTOS.h"
@@ -75,7 +76,8 @@ struct device_pending_scan {
     esp_ble_addr_type_t remote_addr_type;
 };
 
-#define CONFIG_BLE_NUM_PENDING_DEVICES              16
+#define CONFIG_BLE_NUM_PENDING_DEVICES              32 /* Size of the pending ring */
+#define CONFIG_BLE_CANCEL_SCAN_DEVICES              16 /* Cancel the scan when we're "half full" due to potential late arrivals */
 #define BLE_PENDING_DEVICES_MASK                    (CONFIG_BLE_NUM_PENDING_DEVICES - 1)
 
 static
@@ -152,7 +154,7 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
         //ESP_LOGI(TAG, "ESP_GATTC_CONNECT_EVT conn_id %d, if %d", p_data->connect.conn_id, gattc_if);
         esp_err_t mtu_ret = esp_ble_gattc_send_mtu_req (gattc_if, p_data->connect.conn_id);
         if (mtu_ret){
-            ESP_LOGE(TAG, "config MTU error, error code = %x", mtu_ret);
+            ESP_LOGE(TAG, "Error during connection, error code = %x", mtu_ret);
             esp_ble_gattc_close(gattc_if, p_data->connect.conn_id);
         }
         break;
@@ -215,8 +217,11 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
     }
 
     case ESP_GATTC_DISCONNECT_EVT:
-        device_on_disconnect(dev, p_data->disconnect.reason);
-        //ESP_LOGI(TAG, "ESP_GATTC_DISCONNECT_EVT, reason = %d", p_data->disconnect.reason);
+        if (device_on_disconnect(dev, p_data->disconnect.reason)) {
+            ESP_LOGE(TAG, "Error: failure while serializing this device, aborting");
+            abort();
+        }
+        active_dev = NULL;
         hoover_device_done();
         break;
     default:
@@ -233,6 +238,7 @@ void _hoover_task_thread(void *p)
     /* We want this thread to only wake up every 10 seconds for housekeeping */
     const TickType_t ticks_to_wait = 10000 / portTICK_PERIOD_MS;
     unsigned idle_wakes = 0;
+    size_t last_nr_items = 0;
 
     ESP_LOGE(TAG, "Starting the Hoover Thread");
 
@@ -246,6 +252,7 @@ void _hoover_task_thread(void *p)
                 ticks_to_wait);
 
         if (bits & HOOVER_START_BIT_GO) {
+            size_t nr_pending_items = 0;
             idle_wakes = 0;
             if (active_gattc_if == ESP_GATT_IF_NONE) {
                 ESP_LOGE(TAG, "Fatal -- GATT interface is not set, something is awry.");
@@ -253,6 +260,16 @@ void _hoover_task_thread(void *p)
             }
 
             control_task_signal_ble_hoover_start();
+
+            nr_pending_items = device_tracker_nr_devs(NULL);
+
+            if (false == _pending_has_items() && nr_pending_items == last_nr_items) {
+                /* Sleep for a while, take a load off your feet */
+                ESP_LOGI(TAG, "Nothing new; sleeping for 10 seconds");
+                vTaskDelay((10 * 1000)/portTICK_PERIOD_MS);
+            }
+
+            last_nr_items = nr_pending_items;
 
             /* Clear the queue of pending items to scan */
             while (_pending_has_items()) {
@@ -299,9 +316,9 @@ void _hoover_task_thread(void *p)
                     } else {
                         ESP_LOGI(TAG, "Still waiting...");
                     }
-                } while (nr_iters++ < 10);
+                } while (nr_iters++ < 30);
 
-                if (nr_iters >= 10) {
+                if (nr_iters >= 30) {
                     ESP_LOGE(TAG, "Fatal error while connecting to device to hoover, and we timed out.");
                     /* TODO: we need to clean up a bit more elegantly from this happening */
                     abort();
@@ -357,6 +374,11 @@ void hoover_esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
             struct device *dev = NULL;
             uint8_t *bda = scan_result->scan_rst.bda;
 
+            if (_pending_nr_items() == CONFIG_BLE_NUM_PENDING_DEVICES - 1) {
+                ESP_LOGW(TAG, "Out of space for device information arrival; dropping on the floor.");
+                break;
+            }
+
             /* TODO: need to cope with advertising data changing over time */
             if (device_tracker_find(&tracker, &dev, scan_result->scan_rst.bda)) {
                 ESP_LOGI(TAG, "%02x:%02x:%02x-%02x:%02x:%02x -> addr_type: %s (%d) evt_type: %d searchee Adv Data Len %d, Scan Response Len %d",
@@ -388,7 +410,7 @@ void hoover_esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
                         _pending_nr_items());
                     _pending_push_head(scan_result->scan_rst.bda, scan_result->scan_rst.ble_addr_type);
 
-                    if (_pending_nr_items() == CONFIG_BLE_NUM_PENDING_DEVICES - 1) {
+                    if (_pending_nr_items() >= CONFIG_BLE_CANCEL_SCAN_DEVICES) {
                         esp_ble_gap_stop_scanning();
                     }
                 }
@@ -452,6 +474,8 @@ void ble_scanning_setup(void)
 {
     esp_err_t ret = ESP_OK;
 
+    esp_power_level_t power_level;
+
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
@@ -503,6 +527,31 @@ void ble_scanning_setup(void)
     if (local_mtu_ret){
         ESP_LOGE(TAG, "set local  MTU failed, error code = %x", local_mtu_ret);
     }
+
+#if 0
+    power_level = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_DEFAULT);
+    ESP_LOGI(TAG, "Default power level: %d", power_level);
+    power_level = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_SCAN);
+    ESP_LOGI(TAG, "Scan power level: %d", power_level);
+    power_level = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_CONN_HDL0);
+    ESP_LOGI(TAG, "Connection handle 0 power level: %d", power_level);
+
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_N3);
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_N3);
+#endif
+}
+
+void setup_power_management(void)
+{
+    esp_pm_config_esp32_t pm = {
+        .max_freq_mhz = 240,
+        .min_freq_mhz = 80,
+        .light_sleep_enable = true,
+    };
+
+    if (ESP_OK != esp_pm_configure((void *)&pm)) {
+        ESP_LOGW(TAG, "Failed to enable power management.");
+    }
 }
 
 void app_main(void)
@@ -510,7 +559,8 @@ void app_main(void)
     /* Before we do anything else, set the boot status LED */
     control_gpio_setup();
 
-    // Initialize NVS.
+    //setup_power_management();
+
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());

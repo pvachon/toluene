@@ -330,7 +330,7 @@ int device_on_disconnect(struct device *dev, unsigned reason)
     }
 
     if (NULL != dev->obj) {
-        if (ble_object_serialize(dev->obj, &dev->encoded_obj, &dev->encoded_obj_len)) {
+        if (ble_object_serialize(dev->obj, &dev->encoded_obj, &dev->encoded_obj_len, dev->interrogated)) {
             ESP_LOGE(TAG, "Failed to serialize information about this device, aborting.");
             goto done;
         }

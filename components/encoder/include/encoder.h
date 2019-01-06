@@ -19,7 +19,7 @@ int ble_object_get_service(struct ble_object *obj, size_t svc_id, struct ble_ser
 
 int ble_service_add_attribute(struct ble_service *svc, esp_bt_uuid_t const *uuid, void const *data, size_t data_len);
 
-int ble_object_serialize(struct ble_object *obj, uint8_t **pserialized, size_t *pserialized_len);
+int ble_object_serialize(struct ble_object *obj, uint8_t **pserialized, size_t *pserialized_len, bool interrogated);
 
 void ble_object_delete(struct ble_object **pobj);
 
