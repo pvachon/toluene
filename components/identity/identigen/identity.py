@@ -21,8 +21,13 @@ import serial
 import struct
 import io
 import hexdump
+import time
 
 def uart_read_csr(ser):
+    ser.dtr = False
+    ser.rts = True
+    time.sleep(0.1)
+    ser.rts = False
     sio = io.TextIOWrapper(io.BufferedRWPair(ser, ser), newline=None, errors='replace')
     csr = ''
 
@@ -60,6 +65,12 @@ def uart_write_identity(ser, blob):
         if l:
             print('{}'.format(l))
 
+def reset_device(ser):
+    logging.info('Resetting device by toggling RTS')
+    ser.setRTS(True)
+    time.sleep(0.1)
+    ser.setRTS(False)
+
 def generate_identity_certificate(csr_pem, ca_signing_key, ca_certificates, valid_days):
     # Load the CSR
     csr = load_pem_x509_csr(csr_pem, default_backend())
@@ -87,6 +98,8 @@ def generate_identity_certificate(csr_pem, ca_signing_key, ca_certificates, vali
     # Return the entire chain, DER encoded
     chain = [ cert ] + ca_certificates
 
+    print('Certificate: \n{}'.format(cert.public_bytes(serialization.Encoding.PEM).decode('utf-8')))
+
     return [ x.public_bytes(serialization.Encoding.DER) for x in chain ]
 
 
@@ -102,6 +115,7 @@ def main():
     parser.add_argument('-o', '--output-file', help='output file', dest='out_file', default='')
     parser.add_argument('-U', '--uart', help='UART to write the identity blob out to', dest='uart', default='')
     parser.add_argument('-B', '--baud', help='The baud rate', dest='baud_rate', default=115200)
+    parser.add_argument('-S', '--server-ca', help='The trusted server CA (a DER-encoded certificate)', dest='server_ca', required=True)
     parser.add_argument('-C', '--ca-signing-key', help='The CA signing private key', required=True)
     parser.add_argument('-c', '--ca-chain', help='The certificate chain that attests the CA signing key (as a PEM file)', required=True)
     parser.add_argument('-L', '--valid-length', help='The length of time (in days) the certificate is valid for, starting from this moment', required=False, default=1024, type=int)
@@ -122,12 +136,14 @@ def main():
     with open(args.private_key, 'rb') as fp:
         raw_key = fp.read()
 
+    with open(args.server_ca, 'rb') as fp:
+        server_cert = fp.read()
+
     pk = load_pem_private_key(raw_key, password=None, backend=default_backend())
 
     if args.uart:
         logging.info('Using UART {} ({},8n1)'.format(args.uart, args.baud_rate))
         ser = serial.Serial(args.uart, args.baud_rate, timeout=1, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, rtscts=0)
-
         logging.info('Reading CSR from device...')
         csr = uart_read_csr(ser)
         logging.debug('Got csr  {}'.format(csr))
@@ -165,7 +181,7 @@ def main():
         'targetHost' : args.host,
         'targetPort' : args.port,
         'deviceId' : args.device_id,
-        'serverCaRoot' : b'foobarbaz',
+        'serverCaRoot' : server_cert,
         'identityCertChain' : ident_certs,
     }
 

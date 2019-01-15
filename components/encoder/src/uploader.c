@@ -2,8 +2,6 @@
 #include "control.h"
 #include "device.h"
 
-#include "root_cert.h"
-
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "lwip/apps/sntp.h"
@@ -459,12 +457,15 @@ void _uploader_task(void *p)
     mbedtls_ssl_config tls_conf;
     mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_context ctr_drbg;
-    mbedtls_x509_crt ca_cert;
+
+    mbedtls_x509_crt *ca_cert = NULL,
+                     *client_cert_chain = NULL;
+
+    mbedtls_pk_context *device_key = NULL;
 
     mbedtls_ctr_drbg_init(&ctr_drbg);
     mbedtls_ssl_config_init(&tls_conf);
     mbedtls_entropy_init(&entropy);
-    mbedtls_x509_crt_init(&ca_cert);
 
     control_get_config_device_info(&host_name, &port, &dev_id);
 
@@ -487,14 +488,19 @@ void _uploader_task(void *p)
     /* Attach the CTR DRBG we've initialized */
     mbedtls_ssl_conf_rng(&tls_conf, mbedtls_ctr_drbg_random, &ctr_drbg);
 
-	/* Load the DER encoded certificate embedded in the firmware image */
-    if(0 != mbedtls_x509_crt_parse_der(&ca_cert, ca_cert_der, sizeof(ca_cert_der))) {
-		ESP_LOGE(TAG, "Failed to load trusted certificate store, aborting.");
-		abort();
-    }
+    /* Grab the identity certificates and the host identity CA root */
+    control_get_config_host_ca_crt(&ca_cert);
 
-    mbedtls_ssl_conf_ca_chain(&tls_conf, &ca_cert, NULL);
+    mbedtls_ssl_conf_ca_chain(&tls_conf, ca_cert, NULL);
     mbedtls_ssl_conf_authmode(&tls_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+
+    control_get_config_host_client_crt_chain(&client_cert_chain);
+    control_get_identity_key_pair(&device_key);
+
+    if (mbedtls_ssl_conf_own_cert(&tls_conf, client_cert_chain, device_key)) {
+        ESP_LOGE(TAG, "Failed to set the client certificate chain, aborting.");
+        abort();
+    }
 
 #ifdef MBEDTLS_DEBUG_C
     mbedtls_debug_set_threshold(2);

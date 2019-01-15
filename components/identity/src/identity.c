@@ -248,6 +248,10 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
     int target_host_port = -1,
         device_id = -1;
 
+    mbedtls_asn1_sequence seq,
+                          *cur = NULL;
+    memset(&seq, 0, sizeof(seq));
+
     if (NULL == info_blob || 0 == info_blob_len) {
         ESP_LOGE(TAG, "Invalid arguments, aborting.");
         goto done;
@@ -316,16 +320,64 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
 
     ident->device_id = device_id;
 
+    /* Read in the server CA certificate */
+    size_t server_cert_len = 0;
+    mbedtls_x509_crt_init(&ident->server_cert);
+
+    if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &server_cert_len, MBEDTLS_ASN1_OCTET_STRING)) {
+        ESP_LOGE(TAG, "Failed to load device identity certificate, aborting.");
+        goto done;
+    }
+
+    //ESP_LOG_BUFFER_HEXDUMP(TAG, ib_p, server_cert_len, ESP_LOG_INFO);
+
+    int cert_ret = 0;
+    if ((cert_ret = mbedtls_x509_crt_parse_der(&ident->server_cert, ib_p, server_cert_len))) {
+        ESP_LOGE(TAG, "Failed to parse X.509 certificate from identity blob, aborting. (0x%04x)", -cert_ret);
+        goto done;
+    }
+
+    ib_p += server_cert_len;
+
+    /* Read in the client certificate chain */
+    /* Get the raw sequence of certificates */
+    if ((cert_ret = mbedtls_asn1_get_sequence_of(&ib_p, ib_p_end, &seq, MBEDTLS_ASN1_OCTET_STRING))) {
+        ESP_LOGE(TAG, "Failed to load sequence reference for X.509 identity certificates, aborting (0x%04x)", -cert_ret);
+        goto done;
+    }
+
+    mbedtls_asn1_sequence *cert = &seq;
+    size_t cert_id = 0;
+    while (NULL != cert) {
+        mbedtls_asn1_sequence *next = cert->next;
+        if ((cert_ret = mbedtls_x509_crt_parse_der(&ident->client_cert_chain, cert->buf.p, cert->buf.len))) {
+            ESP_LOGE(TAG, "Failed to parse client certificate chain at offset %zu (error: %04x)", cert_id, -cert_ret);
+            goto done;
+        }
+        cert = next;
+        cert_id++;
+    }
+
 #ifdef CONFIG_DUMP_FLASH_CONFIG
     ESP_LOGI(TAG, "Target ESSID: %s", ident->wifi_essid);
     ESP_LOGI(TAG, "Target PSK: %s", ident->wifi_password);
     ESP_LOGI(TAG, "Connecting to: %s", ident->target_host);
     ESP_LOGI(TAG, "Target port: %u", ident->target_port);
     ESP_LOGI(TAG, "Device ID: %u", ident->device_id);
+    ESP_LOGI(TAG, "Device Identity Certificate count: %zu", cert_id);
 #endif
 
     ret = 0;
 done:
+    /* Free the raw chain */
+    cur = seq.next;
+    while (NULL != cur) {
+        mbedtls_asn1_sequence *next = cur->next;
+        memset(cur, 0, sizeof(mbedtls_asn1_sequence));
+        free(cur);
+        cur = next;
+    }
+
     return ret;
 }
 
@@ -376,7 +428,7 @@ int identity_read(struct identity *pident, void *bundle, size_t bundle_length)
     size_t info_blob_delta = bndl_p - info_blob;
     bndl_p += info_blob_len;
     info_blob_len += info_blob_delta;
-    ESP_LOGI(TAG, "Tag length: %zu, bundle length %zu", info_blob_delta, info_blob_len);
+    ESP_LOGD(TAG, "Tag length: %zu, bundle length %zu", info_blob_delta, info_blob_len);
 
     /* Grab outer signature sequence, and r, s */
     if (mbedtls_asn1_get_tag(&bndl_p, bndl_end, &sig_blob_len, MBEDTLS_ASN1_SEQUENCE | MBEDTLS_ASN1_CONSTRUCTED)) {

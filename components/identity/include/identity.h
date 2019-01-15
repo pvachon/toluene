@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <mbedtls/x509_crt.h>
+
 #define IDENTITY_BLOB_LENGTH_MAX            4096
 #define IDENTITY_KEY_LENGTH_MAX             128
 #define IDENTITY_ESSID_LEN_MAX              64
@@ -37,6 +39,16 @@ struct identity {
      * The device identifier, to be included in messages to the backend
      */
     uint32_t device_id;
+
+    /**
+     * The server root CA, our trusted CA
+     */
+    mbedtls_x509_crt server_cert;
+
+    /**
+     * The client certificate chain for this device, for connecting to the backend.
+     */
+    mbedtls_x509_crt client_cert_chain;
 };
 
 /**

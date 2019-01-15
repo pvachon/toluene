@@ -425,9 +425,6 @@ int ble_object_serialize(struct ble_object *obj, uint8_t **pserialized, size_t *
     size_t packed = 0;
     uint8_t *serialized = NULL;
 
-    obj->dev.interrogated = interrogated ? 1 : 0;
-    obj->dev.has_interrogated = 1;
-
     _ble_object_prepare_serialize(obj);
 
     packed = ble_device__get_packed_size(&obj->dev);

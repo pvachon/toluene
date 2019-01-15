@@ -22,6 +22,8 @@
 
 #include <string.h>
 
+#include <mbedtls/pk.h>
+
 #define TAG "CONTROL"
 
 static
@@ -49,7 +51,7 @@ EventGroupHandle_t _control_task_events;
 #define CONTROL_TASK_STATUS_BLE_HOOVER_FINISHED     (1 << 13)
 
 #define CONFIG_TRACKER_MAX_MEM                      (100 * 1024)
-#define CONFIG_CONTROL_TIMER_INTERVAL               (300ull * 1000ull * 1000ull)
+#define CONFIG_CONTROL_TIMER_INTERVAL               (30ull * 1000ull * 1000ull)
 #define CONFIG_STATUS_LED_GPIO                      21
 
 #define CONTROL_CONFIG_HEADER                       0xbebafeca
@@ -79,6 +81,11 @@ esp_timer_handle_t _control_timer;
 
 static
 struct identity device_ident;
+
+static
+mbedtls_pk_context device_ident_key_pair;
+
+bool identity_ready = false;
 
 static
 esp_ble_scan_params_t ble_scan_params = {
@@ -605,7 +612,23 @@ int _control_config_load(struct identity *ident)
         goto done;
     }
 
+    /* Convert the identity_key DER to a pk_context */
+    mbedtls_pk_init(&device_ident_key_pair);
+
+    if (mbedtls_pk_parse_key(&device_ident_key_pair, key_raw, key_len, NULL, 0)) {
+        ESP_LOGE(TAG, "Failed to load identity key, aborting.");
+        goto done;
+    }
+
+    if (MBEDTLS_PK_ECKEY != mbedtls_pk_get_type(&device_ident_key_pair)) {
+        ESP_LOGE(TAG, "Provided device private key is invalid; it should be an EC key, aborting.");
+        goto done;
+    }
+
+
     ESP_LOGI(TAG, "Successfully loaded identity from NVS, continuing!");
+
+    identity_ready = true;
 
     ret = 0;
 done:
@@ -665,12 +688,52 @@ void control_load_config(void)
 
 void control_get_config_wifi(char *essid, char *password)
 {
+    if (false == identity_ready) {
+        ESP_LOGE(TAG, "Fatal: have not yet read in identity, aborting.");
+        abort();
+    }
+
     strncpy(essid, device_ident.wifi_essid, IDENTITY_ESSID_LEN_MAX);
     strncpy(password, device_ident.wifi_password, IDENTITY_PASSWORD_LEN_MAX);
 }
 
+void control_get_config_host_ca_crt(mbedtls_x509_crt **pcrt)
+{
+    if (false == identity_ready) {
+        ESP_LOGE(TAG, "Fatal: have not yet read in identity, aborting.");
+        abort();
+    }
+
+    *pcrt = &device_ident.server_cert;
+}
+
+void control_get_config_host_client_crt_chain(mbedtls_x509_crt **pcrt_chain)
+{
+    if (false == identity_ready) {
+        ESP_LOGE(TAG, "Fatal: have not yet read in identity, aborting.");
+        abort();
+    }
+
+    *pcrt_chain = &device_ident.client_cert_chain;
+}
+
+void control_get_identity_key_pair(mbedtls_pk_context **pkey)
+{
+    if (false == identity_ready) {
+        ESP_LOGE(TAG, "Fatal: have not yet read in identity, aborting.");
+        abort();
+    }
+
+    *pkey = &device_ident_key_pair;
+}
+
 void control_get_config_device_info(char const **phostname, uint16_t *pport, uint32_t *pdev_id)
 {
+    if (false == identity_ready) {
+        ESP_LOGE(TAG, "Fatal: have not yet read in identity, aborting.");
+        abort();
+    }
+
     if (NULL != phostname) {
         *phostname = device_ident.target_host;
     }
@@ -686,6 +749,11 @@ void control_get_config_device_info(char const **phostname, uint16_t *pport, uin
 
 uint32_t control_get_config_sensor_id(void)
 {
+    if (false == identity_ready) {
+        ESP_LOGE(TAG, "Fatal: have not yet read in identity, aborting.");
+        abort();
+    }
+
     return device_ident.device_id;
 }
 

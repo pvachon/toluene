@@ -67,7 +67,6 @@ void hoover_device_done(void)
     xEventGroupSetBits(_hoover_start, HOOVER_DEVICE_DONE);
 }
 
-
 /**
  * Record for a device pending a BLE scan. This is usually contained in a ring buffer.
  */
