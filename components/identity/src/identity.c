@@ -244,7 +244,10 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
     size_t essid_len = 0,
            wpa_psk_len = 0,
            target_host_len = 0,
-           blob_len = 0;
+           blob_len = 0,
+           wifi_auth_len = 0,
+           wifi_auth_cert_len = 0,
+           username_len = 0;
     int target_host_port = -1,
         device_id = -1;
 
@@ -263,7 +266,11 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
         goto done;
     }
 
-    /* Extract the parameters */
+    /* 
+     * Extract the parameters
+     */
+
+    /* Start with the ESSID for the AP to connect to */
     if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &essid_len, MBEDTLS_ASN1_UTF8_STRING)) {
         ESP_LOGE(TAG, "Failed to get ESSID tag, aborting.");
         goto done;
@@ -278,6 +285,22 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
 
     ib_p += essid_len;
 
+    /* Extract the username from the configuration bundle */
+    if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &username_len, MBEDTLS_ASN1_UTF8_STRING)) {
+        ESP_LOGE(TAG, "Failed to get expected username tag, aborting");
+        goto done;
+    }
+
+    if (username_len > IDENTITY_USERNAME_LEN_MAX - 1) {
+        ESP_LOGE(TAG, "username tag is longer than supported, aborting.");
+        goto done;
+    }
+
+    memcpy(ident->wifi_username, ib_p, username_len);
+
+    ib_p += username_len;
+
+    /* Extract the PSK/password from the configuration bundle */
     if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &wpa_psk_len, MBEDTLS_ASN1_UTF8_STRING)) {
         ESP_LOGE(TAG, "Failed to get password tag, aborting");
         goto done;
@@ -292,6 +315,56 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
 
     ib_p += wpa_psk_len;
 
+    /* Get the wifi authentication mode to use */
+    if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &wifi_auth_len, MBEDTLS_ASN1_UTF8_STRING)) {
+        ESP_LOGE(TAG, "Failure while getting wifi auth type tag, aborting");
+        goto done;
+    }
+
+    if (wifi_auth_len >= 3 && !strncmp((const char *)ib_p, "psk", 3)) {
+        ident->wifi_auth = IDENTITY_WIFI_WPA_PSK;
+        ESP_LOGI(TAG, "Configured to use WPA2-PSK for wifi auth");
+    } else if (wifi_auth_len >= 4 && !strncmp((const char *)ib_p, "peap", 4)) {
+        ident->wifi_auth = IDENTITY_WIFI_WPA_PEAP;
+        ESP_LOGI(TAG, "Configured to use WPA2-PEAP for wifi auth, need a certificate");
+    } else if (wifi_auth_len >= 4 && !strncmp((const char *)ib_p, "open", 4)) {
+        ident->wifi_auth = IDENTITY_WIFI_WPA_OPEN;
+        ESP_LOGI(TAG, "Skipping wifi auth; it is an open network (buckle up!)");
+    } else {
+        ESP_LOGE(TAG, "Fatal: unknown wifi auth type");
+        ESP_LOG_BUFFER_HEXDUMP(TAG, ib_p, wifi_auth_len, ESP_LOG_INFO);
+        goto done;
+    }
+
+    ib_p += wifi_auth_len;
+
+    /* Get the wifi authentication certificate -- can just be a dummy if not used */
+    if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &wifi_auth_cert_len, MBEDTLS_ASN1_OCTET_STRING)) {
+        ESP_LOGE(TAG, "Failed to load wifi auth certificate, aborting.");
+        goto done;
+    }
+
+    if (wifi_auth_cert_len > IDENTITY_WIFI_AUTH_CERT_LEN_MAX) {
+        ESP_LOGE(TAG, "Probably a malformed wifi CA certificate, aborting.");
+        goto done;
+    }
+
+    ESP_LOGI(TAG, "Wifi auth certificate is %zu bytes long", wifi_auth_cert_len);
+
+    uint8_t *wifi_auth_cert = NULL;
+    if (NULL == (wifi_auth_cert = malloc(wifi_auth_cert_len))) {
+        ESP_LOGE(TAG, "Unable to allocate %zu bytes for the PEM-formatted auth cert, aborting.", wifi_auth_cert_len);
+        goto done;
+    }
+
+    memcpy(wifi_auth_cert, ib_p, wifi_auth_cert_len);
+
+    ident->wifi_ca_crt_pem = wifi_auth_cert;
+    ident->wifi_ca_crt_pem_len = wifi_auth_cert_len;
+
+    ib_p += wifi_auth_cert_len;
+
+    /* Read in the target host */
     if (mbedtls_asn1_get_tag(&ib_p, ib_p_end, &target_host_len, MBEDTLS_ASN1_UTF8_STRING)) {
         ESP_LOGE(TAG, "Failed to get target host, aborting.");
         goto done;
@@ -360,7 +433,9 @@ int _identity_extract_parameters(struct identity *ident, void *info_blob, size_t
 
 #ifdef CONFIG_DUMP_FLASH_CONFIG
     ESP_LOGI(TAG, "Target ESSID: %s", ident->wifi_essid);
-    ESP_LOGI(TAG, "Target PSK: %s", ident->wifi_password);
+    ESP_LOGI(TAG, "Target wifi network username: %s", ident->wifi_username);
+    ESP_LOGI(TAG, "Target wifi network password: %s", ident->wifi_password);
+    ESP_LOGI(TAG, "Target wifi network CA cert length: %zu", ident->wifi_ca_crt_pem_len);
     ESP_LOGI(TAG, "Connecting to: %s", ident->target_host);
     ESP_LOGI(TAG, "Target port: %u", ident->target_port);
     ESP_LOGI(TAG, "Device ID: %u", ident->device_id);

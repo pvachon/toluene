@@ -107,13 +107,16 @@ def main():
     parser = argparse.ArgumentParser(description='Prepare a device identity blob for a Toluene device')
     parser.add_argument('-v', '--verbose', help='verbose output', action='store_true')
     parser.add_argument('-E', '--wifi-essid', help='access point ESSID', required=True, dest='essid')
+    parser.add_argument('-u', '--wifi-username', help='username for WPA authentication', required=False, default='username')
     parser.add_argument('-P', '--wifi-password', help='access point password', required=True, dest='password')
+    parser.add_argument('-a', '--wifi-auth', help='wifi authentication scheme to use', default='psk')
+    parser.add_argument('-A', '--wifi-cert', help='wifi certificate authority', default='', type=str)
     parser.add_argument('-H', '--service-host', help='host name for the service host', required=True, dest='host')
     parser.add_argument('-p', '--service-port', help='service port number to connect to', required=True, dest='port')
     parser.add_argument('-I', '--device-id', help='device identifier used during submission', required=True, type=lambda x: int(x, 0))
     parser.add_argument('-K', '--private-key', help='private key file name', required=True, dest='private_key')
     parser.add_argument('-o', '--output-file', help='output file', dest='out_file', default='')
-    parser.add_argument('-U', '--uart', help='UART to write the identity blob out to', dest='uart', default='')
+    parser.add_argument('-U', '--uart', help='UART to write the identity blob out to', dest='uart', default='', required=True)
     parser.add_argument('-B', '--baud', help='The baud rate', dest='baud_rate', default=115200)
     parser.add_argument('-S', '--server-ca', help='The trusted server CA (a DER-encoded certificate)', dest='server_ca', required=True)
     parser.add_argument('-C', '--ca-signing-key', help='The CA signing private key', required=True)
@@ -130,23 +133,29 @@ def main():
 
     logging.basicConfig(format='%(asctime)s - %(name)s:%(levelname)s:%(message)s', datefmt='%m/%d/%Y %H:%M:%S', level=log_level)
 
+    if not args.uart:
+        raise Exception('Need to specify a valid UART to connect to for provisioning')
+
+    if args.wifi_auth not in ['psk', 'peap', 'open']:
+        raise Exception('Unknown wifi auth type: {}'.format(args.wifi_auth))
+
     logging.info('Loading key from file {}'.format(args.private_key))
 
     # Read in the key
     with open(args.private_key, 'rb') as fp:
         raw_key = fp.read()
 
+    pk = load_pem_private_key(raw_key, password=None, backend=default_backend())
+
     with open(args.server_ca, 'rb') as fp:
         server_cert = fp.read()
 
-    pk = load_pem_private_key(raw_key, password=None, backend=default_backend())
-
-    if args.uart:
-        logging.info('Using UART {} ({},8n1)'.format(args.uart, args.baud_rate))
-        ser = serial.Serial(args.uart, args.baud_rate, timeout=1, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, rtscts=0)
-        logging.info('Reading CSR from device...')
-        csr = uart_read_csr(ser)
-        logging.debug('Got csr  {}'.format(csr))
+    # If required, read in the wifi auth certificate
+    wifi_auth_cert = b'none'
+    if args.wifi_cert:
+        logging.info('Using authentication CA certificate from file {}'.format(args.wifi_cert))
+        with open(args.wifi_cert, 'rb') as fp:
+            wifi_auth_cert = fp.read()
 
     # Load the CA signing key
     with open(args.ca_signing_key, 'rb') as fp:
@@ -173,11 +182,20 @@ def main():
             else:
                 cur_crt += line
 
+    logging.info('Using UART {} ({},8n1)'.format(args.uart, args.baud_rate))
+    ser = serial.Serial(args.uart, args.baud_rate, timeout=1, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, rtscts=0)
+    logging.info('Reading CSR from device...')
+    csr = uart_read_csr(ser)
+    logging.debug('Got csr  {}'.format(csr))
+
     ident_certs = generate_identity_certificate(csr, ca_signing_key, ca_certificates, args.valid_length)
 
     identity = {
         'wifiESSID' : args.essid,
+        'wifiUsername' : args.wifi_username,
         'wifiPassword' : args.password,
+        'wifiAuthType' : args.wifi_auth,
+        'wifiAuthCert' : wifi_auth_cert,
         'targetHost' : args.host,
         'targetPort' : args.port,
         'deviceId' : args.device_id,
@@ -191,12 +209,14 @@ def main():
 
     di = der_encoder(di_raw)
 
-    hexdump.hexdump(di)
     r, s = decode_dss_signature(pk.sign(di, ec.ECDSA(hashes.SHA256())))
+    """
+    hexdump.hexdump(di)
     hashctx = hashes.Hash(hashes.SHA256(), default_backend())
     hashctx.update(di)
-    logging.info('Digest:')
+    logging.debug('Digest:')
     hexdump.hexdump(hashctx.finalize())
+    """
 
     logging.debug('Device Identity Blob length: {}'.format(len(di)))
     logging.debug('Signature = ({}, {})'.format(r, s))
@@ -216,10 +236,9 @@ def main():
         with open(args.out_file, 'wb+') as fp:
             fp.write(bundle_encoded)
 
-    if args.uart:
-        ser = serial.Serial(args.uart, args.baud_rate, timeout=1, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, rtscts=0)
-        logging.info('Writing identity to device')
-        uart_write_identity(ser, bundle_encoded)
+    ser = serial.Serial(args.uart, args.baud_rate, timeout=1, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, rtscts=0)
+    logging.info('Writing identity to device')
+    uart_write_identity(ser, bundle_encoded)
 
 if __name__ == '__main__':
     main()

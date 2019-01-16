@@ -5,11 +5,19 @@
 
 #include <mbedtls/x509_crt.h>
 
-#define IDENTITY_BLOB_LENGTH_MAX            4096
+#define IDENTITY_BLOB_LENGTH_MAX            8192
 #define IDENTITY_KEY_LENGTH_MAX             128
 #define IDENTITY_ESSID_LEN_MAX              64
 #define IDENTITY_PASSWORD_LEN_MAX           64
+#define IDENTITY_USERNAME_LEN_MAX           64
 #define IDENTITY_TARGET_HOST_LEN_MAX        128
+#define IDENTITY_WIFI_AUTH_CERT_LEN_MAX     1024
+
+enum identity_wifi_auth {
+    IDENTITY_WIFI_WPA_OPEN,
+    IDENTITY_WIFI_WPA_PSK,
+    IDENTITY_WIFI_WPA_PEAP,
+};
 
 /**
  * Structure representing the decoded and verified identity for this device.
@@ -21,9 +29,29 @@ struct identity {
     char wifi_essid[IDENTITY_ESSID_LEN_MAX];
 
     /**
-     * The 802.11 AP's pre-shared key (for WPA2)
+     * The username to use for WPA2 EAP modes
+     */
+    char wifi_username[IDENTITY_USERNAME_LEN_MAX];
+
+    /**
+     * The 802.11 AP's pre-shared key (for WPA2-PSK) or password (for EAP modes)
      */
     char wifi_password[IDENTITY_PASSWORD_LEN_MAX];
+
+    /**
+     * The the CA certificate for WPA2 auth, PEM encoded.
+     */
+    uint8_t *wifi_ca_crt_pem;
+
+    /**
+     * The length of the PEM-encoded CA certificate for WPA2 auth.
+     */
+    size_t wifi_ca_crt_pem_len;
+
+    /**
+     * The type of WiFi auth to use
+     */
+    enum identity_wifi_auth wifi_auth;
 
     /**
      * The target host name, to be resolved using DNS

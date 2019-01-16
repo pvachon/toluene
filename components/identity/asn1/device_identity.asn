@@ -19,8 +19,17 @@ DeviceIdentityInfo ::= SEQUENCE {
     -- The ESSID we are to connect to
     wifiESSID UTF8String,
 
-    -- The password for the network, supporting WPA2-PSK
+    -- The username for the network. Used only if using an EAP mode.
+    wifiUsername UTF8String,
+
+    -- The password for the network
     wifiPassword UTF8String,
+
+    -- The type of authentication to use
+    wifiAuthType UTF8String,
+
+    -- The certificate to use, if any, for the desired auth mechanism
+    wifiAuthCert OCTET STRING,
 
     -- The target host IP address or hostname to connect to
     targetHost UTF8String,
