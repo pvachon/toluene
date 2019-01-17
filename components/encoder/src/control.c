@@ -51,7 +51,7 @@ EventGroupHandle_t _control_task_events;
 #define CONTROL_TASK_STATUS_BLE_HOOVER_FINISHED     (1 << 13)
 
 #define CONFIG_TRACKER_MAX_MEM                      (100 * 1024)
-#define CONFIG_CONTROL_TIMER_INTERVAL               (300ull * 1000ull * 1000ull)
+#define CONFIG_CONTROL_TIMER_INTERVAL               (120ull * 1000ull * 1000ull)
 #define CONFIG_STATUS_LED_GPIO                      21
 
 #define CONTROL_CONFIG_HEADER                       0xbebafeca
