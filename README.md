@@ -6,7 +6,9 @@ This is the firmware for the BLE sniffer
 
 Install the ESP-IDF for ESP32 (see https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html), then simply invoke `make`.
 
-# Provisioning Process
+Note that you need to apply the patch to the ESP-IDF in https://github.com/espressif/esp-idf/pull/2735 to your ESP-IDF to eliminate some crashes.
+
+# Device Provisioning Process
 
 1. Generate a provisioning key (an EC key on the P-256 curve) - convert public and private key to PEM form
 2. Overwrite the public key in `components/identity/include/trusted_pk.h` with your new public key
