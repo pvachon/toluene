@@ -410,7 +410,7 @@ int device_on_read_characteristic(struct device *dev, esp_gatt_if_t gattc_if, ui
 
     if (dev->state != DEVICE_READ_ATTR) {
         /* Schedule a disconnect */
-        ESP_LOGE(HOOVER, "All done, scheduling a disconnect.");
+        ESP_LOGI(HOOVER, "All done, scheduling a disconnect.");
         esp_ble_gattc_close(gattc_if, conn_id);
     }
 

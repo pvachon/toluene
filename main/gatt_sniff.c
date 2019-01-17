@@ -239,7 +239,7 @@ void _hoover_task_thread(void *p)
     unsigned idle_wakes = 0;
     size_t last_nr_items = 0;
 
-    ESP_LOGE(TAG, "Starting the Hoover Thread");
+    ESP_LOGI(TAG, "Starting the Hoover Thread");
 
     do {
         EventBits_t bits = xEventGroupWaitBits(_hoover_start,
@@ -410,6 +410,7 @@ void hoover_esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
                     _pending_push_head(scan_result->scan_rst.bda, scan_result->scan_rst.ble_addr_type);
 
                     if (_pending_nr_items() >= CONFIG_BLE_CANCEL_SCAN_DEVICES) {
+                        ESP_LOGW(TAG, "Hit maximum number of devices, scheduling a scan stop.");
                         esp_ble_gap_stop_scanning();
                     }
                 }
