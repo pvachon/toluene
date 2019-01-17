@@ -1,4 +1,4 @@
-# Toluene Huffer
+# Toluene Sniffer
 
 This is the firmware for the BLE sniffer
 
