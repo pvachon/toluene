@@ -25,3 +25,6 @@ And you're done!
 
 Note that if you invoke `identity.py` with the `-h` flag it will give you insight into the format for each argument.
 
+# License
+
+This code is licensed under the GNU General Public License v3 or later. See `COPYING` in the root of this source repository for more info.
