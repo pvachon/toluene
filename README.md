@@ -6,7 +6,7 @@ This is the firmware for the BLE sniffer
 
 Install the ESP-IDF for ESP32 (see https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html), then simply invoke `make`.
 
-Note that you need to apply the patch to the ESP-IDF in https://github.com/espressif/esp-idf/pull/2735 to your ESP-IDF to eliminate some crashes.
+There are a few bugs Toluene exposes in the ESP-IDF that aren't yet upstream. Apply the patch `esp-idf-fixes-for-toluene-sensor.patch` to your ESP-IDF source directory, i.e. using `patch -p1`. This ESP-IDF instance shoud only be used for Toluene, because it will change some expected behaviours for normal GATT client use cases.
 
 # Device Provisioning Process
 
