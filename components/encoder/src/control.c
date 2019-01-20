@@ -682,19 +682,52 @@ void _control_config_init_subsys(struct identity *ident)
 
 void control_load_config(void)
 {
+    if (true == identity_ready) {
+        ESP_LOGE(TAG, "Fatal: already initialized identity, aborting.");
+        abort();
+    }
+
     ESP_LOGI(TAG, "Initializing device identity");
     _control_config_init_subsys(&device_ident);
 }
 
-void control_get_config_wifi(char *essid, char *password)
+enum identity_wifi_auth control_get_wifi_auth_mode(void)
 {
     if (false == identity_ready) {
         ESP_LOGE(TAG, "Fatal: have not yet read in identity, aborting.");
         abort();
     }
 
-    strncpy(essid, device_ident.wifi_essid, IDENTITY_ESSID_LEN_MAX);
-    strncpy(password, device_ident.wifi_password, IDENTITY_PASSWORD_LEN_MAX);
+    return device_ident.wifi_auth;
+}
+
+void control_get_config_wifi(char *essid, char *password, char *username, uint8_t **pca_cert, size_t *pca_cert_len)
+{
+    if (false == identity_ready) {
+        ESP_LOGE(TAG, "Fatal: have not yet read in identity, aborting.");
+        abort();
+    }
+
+    if (NULL != essid) {
+        strncpy(essid, device_ident.wifi_essid, IDENTITY_ESSID_LEN_MAX);
+    }
+
+    if (NULL != password) {
+        strncpy(password, device_ident.wifi_password, IDENTITY_PASSWORD_LEN_MAX);
+    }
+
+    if (NULL != username) {
+        strncpy(username, device_ident.wifi_username, IDENTITY_USERNAME_LEN_MAX);
+    }
+
+    if (NULL != pca_cert) {
+        *pca_cert = device_ident.wifi_ca_crt_pem;
+    }
+
+    if (NULL != pca_cert_len) {
+        *pca_cert_len = device_ident.wifi_ca_crt_pem_len;
+    }
+
 }
 
 void control_get_config_host_ca_crt(mbedtls_x509_crt **pcrt)

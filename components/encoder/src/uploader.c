@@ -2,12 +2,15 @@
 #include "control.h"
 #include "device.h"
 
+#include <identity.h>
+
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "lwip/apps/sntp.h"
 
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "esp_wpa2.h"
 #include "esp_event_loop.h"
 #include "esp_pm.h"
 
@@ -32,7 +35,7 @@
 #include <sys/time.h>
 
 #define TAG                                     "UPLOADER"
-#define CONFIG_MAX_SNTP_RETRIES                 20
+#define CONFIG_MAX_SNTP_RETRIES                 100
 #define CONFIG_SNTP_REFRESH_COUNT               10
 
 /**
@@ -612,6 +615,14 @@ void uploader_init(void)
 {
     wifi_config_t wifi_cfg;
 
+    enum identity_wifi_auth auth_mode = control_get_wifi_auth_mode();
+
+    uint8_t *ca_cert_chain = NULL;
+    size_t ca_cert_chain_len = 0;
+    char eap_user[IDENTITY_USERNAME_LEN_MAX],
+         eap_pass[IDENTITY_PASSWORD_LEN_MAX];
+    esp_wpa2_config_t config = WPA2_CONFIG_INIT_DEFAULT();
+
     memset(&wifi_cfg, 0, sizeof(wifi_cfg));
 
     tcpip_adapter_init();
@@ -626,9 +637,49 @@ void uploader_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
-    control_get_config_wifi((char *)wifi_cfg.sta.ssid, (char *)wifi_cfg.sta.password);
+    control_get_config_wifi((char *)wifi_cfg.sta.ssid, NULL, NULL, NULL, NULL);
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_cfg));
+    switch (auth_mode) {
+    case IDENTITY_WIFI_WPA_PSK:
+        control_get_config_wifi(NULL, (char *)wifi_cfg.sta.password, NULL, NULL, NULL);
+        ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_cfg));
+
+        break;
+    case IDENTITY_WIFI_WPA_PEAP:
+        ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_cfg));
+        control_get_config_wifi(NULL, eap_pass, eap_user, &ca_cert_chain, &ca_cert_chain_len);
+        if (ESP_OK != esp_wifi_sta_wpa2_ent_set_ca_cert(ca_cert_chain, ca_cert_chain_len)) {
+            ESP_LOGE(TAG, "Failed to set CA certificate chain, aborting.");
+            abort();
+        }
+
+        if (ESP_OK != esp_wifi_sta_wpa2_ent_set_username((uint8_t *)eap_user, strlen(eap_user))) {
+            ESP_LOGE(TAG, "Failed to set EAP username, aborting");
+            abort();
+        }
+
+        if (ESP_OK != esp_wifi_sta_wpa2_ent_set_password((uint8_t *)eap_pass, strlen(eap_pass))) {
+            ESP_LOGE(TAG, "Failed to set EAP password, aborting");
+            abort();
+        }
+
+        if (ESP_OK != esp_wifi_sta_wpa2_ent_set_disable_time_check(true)) {
+            ESP_LOGE(TAG, "Failed to disable certificate time check");
+            abort();
+        }
+
+        if (ESP_OK != esp_wifi_sta_wpa2_ent_enable(&config)) {
+            ESP_LOGE(TAG, "Failed to enable WPA2-PEAP configuration, aborting.");
+            abort();
+        }
+        break;
+    case IDENTITY_WIFI_WPA_OPEN:
+        ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_cfg));
+        break;
+    default:
+        ESP_LOGE(TAG, "Unknown wifi auth mode, aborting.");
+        abort();
+    }
 
     /* Create the worker thread */
     _uploader_create_task();

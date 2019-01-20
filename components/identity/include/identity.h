@@ -11,7 +11,7 @@
 #define IDENTITY_PASSWORD_LEN_MAX           64
 #define IDENTITY_USERNAME_LEN_MAX           64
 #define IDENTITY_TARGET_HOST_LEN_MAX        128
-#define IDENTITY_WIFI_AUTH_CERT_LEN_MAX     1024
+#define IDENTITY_WIFI_AUTH_CERT_LEN_MAX     4096
 
 enum identity_wifi_auth {
     IDENTITY_WIFI_WPA_OPEN,
