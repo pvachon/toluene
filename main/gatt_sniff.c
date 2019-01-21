@@ -26,6 +26,7 @@
 #include "freertos/event_groups.h"
 
 #define TAG                                         "HUFFER"
+#define HOOVER_TAG                                  "HOOVERT"
 
 #define CONFIG_BLE_SCAN_DURATION                    10
 
@@ -52,17 +53,29 @@ esp_gatt_if_t active_gattc_if = ESP_GATT_IF_NONE;
 static
 SemaphoreHandle_t _hoover_contexts;
 
+/**
+ * Mutex for managing whether or not a new BLE device connection can be started
+ */
+static
+SemaphoreHandle_t _hoover_ready;
+
 static
 struct gattc_profile_inst active_conns[CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN];
 
-void gattc_profile_inst_clear(struct gattc_profile_inst *inst)
+static
+void gattc_profile_free(struct gattc_profile_inst *inst)
 {
     ESP_LOGI(TAG, "--> Releasing %p", inst);
+
     inst->active_dev = NULL;
     inst->busy = false;
-    xSemaphoreGive(_hoover_contexts);
+    if (pdTRUE != xSemaphoreGive(_hoover_contexts)) {
+        ESP_LOGE(TAG, "Failed to give semaphore back, aborting");
+        abort();
+    }
 }
 
+static
 struct gattc_profile_inst *gattc_profile_find(esp_gatt_if_t gattc_if)
 {
     for (size_t i = 0; i < CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN; i++) {
@@ -74,9 +87,11 @@ struct gattc_profile_inst *gattc_profile_find(esp_gatt_if_t gattc_if)
     return NULL;
 }
 
-struct gattc_profile_inst *gattc_profile_find_available(void)
+static
+struct gattc_profile_inst *gattc_profile_alloc(void)
 {
     const TickType_t ticks_to_wait = 10000 / portTICK_PERIOD_MS;
+
     int sem_stat = pdFALSE,
         nr_iters = 0;
 
@@ -91,6 +106,7 @@ struct gattc_profile_inst *gattc_profile_find_available(void)
 
     for (size_t i = 0; i < CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN; i++) {
         if (active_conns[i].busy == false) {
+            ESP_LOGI(TAG, "--> Allocating %p (id = %d)", &active_conns[i], active_conns[i].gattc_if);
             active_conns[i].busy = true;
             return &active_conns[i];
         }
@@ -196,16 +212,37 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
     struct gattc_profile_inst *prof = gattc_profile_find(gattc_if);
     struct device *dev = NULL;
 
+    if (event == ESP_GATTC_CONNECT_EVT || event == ESP_GATTC_DISCONNECT_EVT) {
+        return;
+    }
+
     if (NULL != prof) {
         dev = prof->active_dev;
     }
 
+    if (NULL == prof && event != ESP_GATTC_REG_EVT) {
+        ESP_LOGE(TAG, "Fatal: non-registration event occurred yet profile is not allocated, aborting.");
+        abort();
+    }
+
+    if (NULL != prof && NULL == prof->active_dev) {
+        ESP_LOGW(TAG, "Active device is NULL, but a profile has been selected (%p) for event %d", prof, event);
+    }
+
+    if (NULL != prof && false == prof->busy) {
+        ESP_LOGW(TAG, "Profile busy is not set, but a profile has been selected (%p) for event %d", prof, event);
+    }
+
     switch (event) {
     case ESP_GATTC_REG_EVT:
-        ESP_LOGI(TAG, "ESP_GATTC_REG_EVT");
+        ESP_LOGI(TAG, "ESP_GATTC_REG_EVT (gattc_if = %d)", gattc_if);
+        if (param->reg.status != ESP_OK) {
+            ESP_LOGE(TAG, "gattc registration failed, aborting (reason=%d, ID = %d)", param->reg.status, param->reg.app_id);
+            abort();
+        }
 
         if (NULL != prof) {
-            ESP_LOGE(TAG, "GATTC profile is already set");
+            ESP_LOGE(TAG, "GATTC profile is already set up");
             abort();
         }
 
@@ -219,31 +256,52 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
         prof->gattc_if = gattc_if;
         break;
 
-    case ESP_GATTC_CONNECT_EVT: {
-        //ESP_LOGI(TAG, "ESP_GATTC_CONNECT_EVT conn_id %d, if %d", p_data->connect.conn_id, gattc_if);
-        esp_err_t mtu_ret = esp_ble_gattc_send_mtu_req (gattc_if, p_data->connect.conn_id);
-        if (mtu_ret){
-            ESP_LOGE(TAG, "Error during connection, error code = %x", mtu_ret);
-            esp_ble_gattc_close(gattc_if, p_data->connect.conn_id);
+    case ESP_GATTC_CLOSE_EVT:
+        ESP_LOGI(TAG, "ESP_GATTC_CLOSE_EVT (gattc_if=%d)", gattc_if);
+        if (device_on_disconnect(dev, p_data->disconnect.reason)) {
+            ESP_LOGE(TAG, "Error: failure while serializing this device, aborting");
+            abort();
         }
-        break;
-    }
 
-    case ESP_GATTC_OPEN_EVT:
-        //ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT");
+        gattc_profile_free(prof);
+        break;
+
+    case ESP_GATTC_CONNECT_EVT:
+        //ESP_LOGI(TAG, "ESP_GATTC_CONNECT_EVT (gattc_if=%d prof=%p conn_id %d)", gattc_if, prof, param->connect.conn_id);
+        break;
+
+    case ESP_GATTC_OPEN_EVT: {
+        ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT (gattc_if = %d)", gattc_if);
+        if (pdFALSE == xSemaphoreGive(_hoover_ready)) {
+            ESP_LOGE(TAG, "Failed to notify we are ready for GATT-ness, aborting.");
+            abort();
+        }
+
         if (param->open.status != ESP_GATT_OK){
             ESP_LOGI(TAG, "Open failed, status %d, prof = %p", p_data->open.status, prof);
-            esp_ble_gattc_close(gattc_if, p_data->open.conn_id);
+            if (device_on_disconnect(dev, p_data->open.status)) {
+                ESP_LOGE(TAG, "Error: failure while serializing this device, aborting");
+                abort();
+            }
+
+            gattc_profile_free(prof);
             break;
+        }
+
+        esp_err_t mtu_ret = esp_ble_gattc_send_mtu_req(gattc_if, p_data->open.conn_id);
+        if (mtu_ret){
+            ESP_LOGE(TAG, "Error while setting MTU, error code = %x", mtu_ret);
         }
         dev->interrogated = true;
         break;
+    }
 
     case ESP_GATTC_CFG_MTU_EVT:
+        ESP_LOGI(TAG, "ESP_GATTC_CFG_MTU_EVT, Status %d, MTU %d, conn_id %d gattc_if=%d", param->cfg_mtu.status, param->cfg_mtu.mtu, param->cfg_mtu.conn_id, gattc_if);
         if (param->cfg_mtu.status != ESP_GATT_OK){
             ESP_LOGW(TAG,"Setting large MTU failed, status code:%x", param->cfg_mtu.status);
         }
-        //ESP_LOGI(TAG, "ESP_GATTC_CFG_MTU_EVT, Status %d, MTU %d, conn_id %d", param->cfg_mtu.status, param->cfg_mtu.mtu, param->cfg_mtu.conn_id);
+
         if (device_on_open(dev, gattc_if, p_data->cfg_mtu.conn_id)) {
             esp_ble_gattc_close(gattc_if, p_data->cfg_mtu.conn_id);
         }
@@ -270,7 +328,9 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
         }
 
         if (device_on_search_finished(dev, gattc_if, p_data->search_cmpl.conn_id)) {
-            esp_ble_gattc_close(gattc_if, p_data->search_cmpl.conn_id);
+            if (ESP_OK != esp_ble_gattc_close(gattc_if, p_data->read.conn_id)) {
+                ESP_LOGW(TAG, "Failure while scheduling close for gattc_if=%d, conn_id=%u", gattc_if, p_data->search_cmpl.conn_id);
+            }
         }
         break;
 
@@ -278,21 +338,18 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
     case ESP_GATTC_READ_MULTIPLE_EVT:
     {
         if (device_on_read_characteristic(dev, gattc_if, p_data->read.conn_id, p_data->read.value, p_data->read.value_len, p_data->read.handle)) {
-            ESP_LOGE(TAG, "Failure during characteristic read, disconnecting.");
-            esp_ble_gattc_close(gattc_if, p_data->read.conn_id);
+            ESP_LOGE(TAG, "Failure during characteristic read, disconnecting (gattc_if=%d, conn_id=%u).", gattc_if, p_data->read.conn_id);
+            if (ESP_OK != esp_ble_gattc_close(gattc_if, p_data->read.conn_id)) {
+                ESP_LOGW(TAG, "Failure while scheduling close for gattc_if=%d, conn_id=%u", gattc_if, p_data->read.conn_id);
+            }
         }
 
         break;
     }
 
     case ESP_GATTC_DISCONNECT_EVT:
-        ESP_LOGI(TAG, "ESP_GATTC_DISCONNECT_EVT (prof=%p)", prof);
-        if (device_on_disconnect(dev, p_data->disconnect.reason)) {
-            ESP_LOGE(TAG, "Error: failure while serializing this device, aborting");
-            abort();
-        }
-
-        gattc_profile_inst_clear(prof);
+ //       ESP_LOGI(TAG, "ESP_GATTC_DISCONNECT_EVT (prof=%p, gattc_if=%d, conn_id=%u reason=%d)", prof, gattc_if,
+ //               p_data->disconnect.conn_id, p_data->disconnect.reason);
         break;
     default:
         break;
@@ -354,16 +411,29 @@ void _hoover_task_thread(void *p)
                     continue;
                 }
 
-                ESP_LOGI(TAG, "Scanning device %02x:%02x:%02x-%02x:%02x:%02x",
-                            bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
-
-                struct gattc_profile_inst *profile = gattc_profile_find_available();
+                struct gattc_profile_inst *profile = gattc_profile_alloc();
                 if (NULL == profile) {
                     ESP_LOGE(TAG, "No profiles available, we should not be in this position, aborting");
                     abort();
                 }
 
                 profile->active_dev = dev;
+
+                size_t nr_wait_iters = 0;
+                do {
+                    if (pdTRUE == xSemaphoreTake(_hoover_ready, ticks_to_wait)) {
+                        break;
+                    }
+                } while (nr_wait_iters++ < 10);
+
+                if (nr_wait_iters == 10) {
+                    ESP_LOGE(TAG, "Failed to get notified back that the BLE stack is ready, aborting.");
+                    abort();
+                }
+
+                ESP_LOGI(TAG, "Scanning device %02x:%02x:%02x-%02x:%02x:%02x on if %d",
+                            bda[0], bda[1], bda[2], bda[3], bda[4], bda[5],
+                            profile->gattc_if);
 
                 /* Signal to open the GATT server and let the GATT client state machine take over */
                 if (ESP_OK != esp_ble_gattc_open(profile->gattc_if, bda, type, true)) {
@@ -374,9 +444,11 @@ void _hoover_task_thread(void *p)
                         abort();
                     }
 
-                    gattc_profile_inst_clear(profile);
+                    gattc_profile_free(profile);
                 }
             }
+
+            ESP_LOGI(HOOVER_TAG, "All done, waiting for outstanding scans to finish");
 
             UBaseType_t sem_count = uxSemaphoreGetCount(_hoover_contexts);
             size_t nr_iters = 0;
@@ -385,6 +457,7 @@ void _hoover_task_thread(void *p)
                     /* Give it back .. not efficient, alas */
                     xSemaphoreGive(_hoover_contexts);
                 } else {
+                    ESP_LOGE(TAG, "We are missing some semaphores (last count free = %u)", sem_count);
                     nr_iters++;
                 }
 
@@ -410,9 +483,14 @@ void hoover_task_init(void)
     _hoover_contexts = xSemaphoreCreateCounting(CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN,
                                                 CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN);
 
+    _hoover_ready = xSemaphoreCreateBinary();
+    /* TODO: fixme */
+    xSemaphoreGive(_hoover_ready);
+
     for (size_t i = 0; i < CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN; i++) {
-        gattc_profile_inst_clear(&active_conns[i]);
+        active_conns[i].busy = false;
         active_conns[i].active_dev = NULL;
+        active_conns[i].gattc_if = ESP_GATT_IF_NONE;
     }
 
     int ret = xTaskCreate(_hoover_task_thread,

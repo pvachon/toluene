@@ -29,6 +29,7 @@ struct device {
     bool interrogated;
     bool is_public;
     uint8_t nr_interrogations;
+    uint8_t bda_addr[DEVICE_MAC_ADDR_LEN];
     struct ble_object *obj;
     uint8_t *encoded_obj;
     size_t encoded_obj_len;

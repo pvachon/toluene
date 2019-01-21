@@ -196,14 +196,13 @@ int _device_hoover_service_attribs(struct device *dev, esp_gatt_if_t gattc_if, u
 
     struct ble_service *svc = NULL;
 
-    ESP_LOGI(HOOVER, "Hoovering attributes starting at characteristic %zu (of %zu) (service %zu)", dev->cur_char, dev->nr_chars, dev->cur_svc);
+    ESP_LOGD(HOOVER, "Hoovering attributes starting at characteristic %zu (of %zu) (service %zu)", dev->cur_char, dev->nr_chars, dev->cur_svc);
 
     for (size_t i = dev->cur_char; i < dev->nr_chars; i++) {
         /* Check if this is one we want to read */
         esp_gattc_char_elem_t *charac = &dev->chars[i];
 
         if (charac->properties & ESP_GATT_CHAR_PROP_BIT_READ) {
-        //if (charac->uuid.len == ESP_UUID_LEN_16 && __device_attr_is_interesting(charac->uuid.uuid.uuid16)) {
             if (_device_request_read_attrib(dev, gattc_if, conn_id, charac)) {
                 goto done;
             }
@@ -247,6 +246,26 @@ int device_on_found_service(struct device *dev, esp_gatt_if_t gattc_if, uint16_t
 
     if (ble_object_add_service(dev->obj, &svc, service_uuid, start_hdl, end_hdl)) {
         ESP_LOGE(TAG, "Failed to add service record; proceeding with caution.");
+        goto done;
+    }
+
+    ret = 0;
+done:
+    return ret;
+}
+
+static
+int _device_schedule_close(struct device *dev)
+{
+    int ret = -1;
+
+    if (NULL == dev) {
+        ESP_LOGE(TAG, "Device is NULL, aborting attempt to schedule a close");
+        goto done;
+    }
+
+    if (ESP_OK != esp_ble_gap_disconnect(dev->bda_addr)) {
+        ESP_LOGE(TAG, "Failed to schedule GAP disconnect for device, failing.");
         goto done;
     }
 
@@ -302,7 +321,10 @@ int device_on_search_finished(struct device *dev, esp_gatt_if_t gattc_if, uint16
 
     if (dev->state != DEVICE_READ_ATTR) {
         /* Schedule a disconnect */
-        esp_ble_gattc_close(gattc_if, conn_id);
+        ESP_LOGI(TAG, "No attributes to query, scheduling a disconnect (gattc_if=%d, conn_id=%u)", gattc_if, conn_id);
+        if (ESP_OK != esp_ble_gattc_close(gattc_if, conn_id)) {
+            ESP_LOGW(TAG, "Warning: failure while closing gattc_if=%d, conn_id=%u", gattc_if, conn_id);
+        }
     }
 
     ret = 0;
@@ -415,8 +437,11 @@ int device_on_read_characteristic(struct device *dev, esp_gatt_if_t gattc_if, ui
 
     if (dev->state != DEVICE_READ_ATTR) {
         /* Schedule a disconnect */
-        ESP_LOGI(HOOVER, "All done, scheduling a disconnect.");
-        esp_ble_gattc_close(gattc_if, conn_id);
+        ESP_LOGI(HOOVER, "All done, scheduling a disconnect. (gattc_if=%d conn_id=%u)", gattc_if, conn_id);
+
+        if (ESP_OK != esp_ble_gattc_close(gattc_if, conn_id)) {
+            ESP_LOGW(HOOVER, "Failed to schedule a disconnect for gattc_if=%d, conn_id=%u", gattc_if, conn_id);
+        }
     }
 
     ret = 0;
@@ -498,6 +523,8 @@ struct device *device_new(uint32_t sensor_id, uint8_t const * mac, esp_ble_evt_t
 
     ndev->interrogated = false;
     ndev->nr_interrogations = 0;
+
+    memcpy(ndev->bda_addr, mac, 6);
 
     ndev->crc = _hash_mac(mac);
 
