@@ -46,18 +46,21 @@ struct device *active_dev = NULL;
 esp_gatt_if_t active_gattc_if = ESP_GATT_IF_NONE;
 #endif
 
+/**
+ * Semaphore for managing hoover contexts available
+ */
 static
-struct gattc_profile_inst active_conns[CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN];
+SemaphoreHandle_t _hoover_contexts;
 
 static
-size_t nr_active = 0;
+struct gattc_profile_inst active_conns[CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN];
 
 void gattc_profile_inst_clear(struct gattc_profile_inst *inst)
 {
     ESP_LOGI(TAG, "--> Releasing %p", inst);
     inst->active_dev = NULL;
     inst->busy = false;
-    nr_active--;
+    xSemaphoreGive(_hoover_contexts);
 }
 
 struct gattc_profile_inst *gattc_profile_find(esp_gatt_if_t gattc_if)
@@ -73,10 +76,22 @@ struct gattc_profile_inst *gattc_profile_find(esp_gatt_if_t gattc_if)
 
 struct gattc_profile_inst *gattc_profile_find_available(void)
 {
+    const TickType_t ticks_to_wait = 10000 / portTICK_PERIOD_MS;
+    int sem_stat = pdFALSE,
+        nr_iters = 0;
+
+    do {
+        sem_stat = xSemaphoreTake(_hoover_contexts, ticks_to_wait);
+    } while (sem_stat == pdFALSE && nr_iters++ < 30);
+
+    if (nr_iters == 30) {
+        ESP_LOGE(TAG, "Timeout while waiting for a GATT profile to become free, aborting.");
+        abort();
+    }
+
     for (size_t i = 0; i < CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN; i++) {
         if (active_conns[i].busy == false) {
             active_conns[i].busy = true;
-            nr_active++;
             return &active_conns[i];
         }
     }
@@ -91,28 +106,16 @@ static
 EventGroupHandle_t _hoover_start;
 
 /**
- * Semaphore for completion of hoover events
- */
-static
-SemaphoreHandle_t _hoover_completions;
-
-/**
  * Hoover task thread handle
  */
 static
 xTaskHandle _hoover_task_hdl;
 
 #define HOOVER_START_BIT_GO                 (1 << 0)
-#define HOOVER_DEVICE_DONE                  (1 << 1)
 
 void hoover_wake(void)
 {
     xEventGroupSetBits(_hoover_start, HOOVER_START_BIT_GO);
-}
-
-void hoover_device_done(void)
-{
-    xEventGroupSetBits(_hoover_start, HOOVER_DEVICE_DONE);
 }
 
 /**
@@ -229,7 +232,7 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
     case ESP_GATTC_OPEN_EVT:
         //ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT");
         if (param->open.status != ESP_GATT_OK){
-            ESP_LOGI(TAG, "Open failed, status %d", p_data->open.status);
+            ESP_LOGI(TAG, "Open failed, status %d, prof = %p", p_data->open.status, prof);
             esp_ble_gattc_close(gattc_if, p_data->open.conn_id);
             break;
         }
@@ -283,14 +286,13 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
     }
 
     case ESP_GATTC_DISCONNECT_EVT:
-        ESP_LOGI(TAG, "ESP_GATTC_DISCONNECT_EVT");
+        ESP_LOGI(TAG, "ESP_GATTC_DISCONNECT_EVT (prof=%p)", prof);
         if (device_on_disconnect(dev, p_data->disconnect.reason)) {
             ESP_LOGE(TAG, "Error: failure while serializing this device, aborting");
             abort();
         }
 
         gattc_profile_inst_clear(prof);
-        hoover_device_done();
         break;
     default:
         break;
@@ -312,8 +314,7 @@ void _hoover_task_thread(void *p)
 
     do {
         EventBits_t bits = xEventGroupWaitBits(_hoover_start,
-                HOOVER_START_BIT_GO |
-                HOOVER_DEVICE_DONE
+                HOOVER_START_BIT_GO
                 ,
                 pdTRUE,
                 pdFALSE,
@@ -358,7 +359,7 @@ void _hoover_task_thread(void *p)
 
                 struct gattc_profile_inst *profile = gattc_profile_find_available();
                 if (NULL == profile) {
-                    ESP_LOGE(TAG, "No profiles available, we should not be in this position, aborting (active = %zu)", nr_active);
+                    ESP_LOGE(TAG, "No profiles available, we should not be in this position, aborting");
                     abort();
                 }
 
@@ -375,33 +376,24 @@ void _hoover_task_thread(void *p)
 
                     gattc_profile_inst_clear(profile);
                 }
+            }
 
-                if (nr_active == CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN ||
-                        (nr_active != 0 && false == _pending_has_items()))
-                {
-                    /* Sleep until we're notified that all active device negotiations are done */
-                    size_t nr_iters = 0;
-                    ESP_LOGI(TAG, "Waiting until either a connection frees or the last item is processed...");
-                    do {
-                        EventBits_t bits = xEventGroupWaitBits(_hoover_start,
-                                HOOVER_DEVICE_DONE,
-                                pdTRUE,
-                                pdFALSE,
-                                ticks_to_wait);
-                        if (bits & HOOVER_DEVICE_DONE) {
-                            ESP_LOGI(TAG, "Finished hoovering device attributes, continuing");
-                            break;
-                        } else {
-                            ESP_LOGI(TAG, "Still waiting...");
-                        }
-                    } while (nr_iters++ < 30);
-
-                    if (nr_iters >= 30) {
-                        ESP_LOGE(TAG, "Fatal error while connecting to device to hoover, and we timed out.");
-                        /* TODO: we need to clean up a bit more elegantly from this happening */
-                        abort();
-                    }
+            UBaseType_t sem_count = uxSemaphoreGetCount(_hoover_contexts);
+            size_t nr_iters = 0;
+            while (sem_count != CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN && nr_iters < 30) {
+                if (pdTRUE == xSemaphoreTake(_hoover_contexts, ticks_to_wait)) {
+                    /* Give it back .. not efficient, alas */
+                    xSemaphoreGive(_hoover_contexts);
+                } else {
+                    nr_iters++;
                 }
+
+                sem_count = uxSemaphoreGetCount(_hoover_contexts);
+            }
+
+            if (nr_iters == 30) {
+                ESP_LOGE(TAG, "Fatal error, timed out while waiting for resources to free, aborting.");
+                abort();
             }
 
             control_task_signal_ble_hoover_finished();
@@ -414,6 +406,14 @@ void _hoover_task_thread(void *p)
 void hoover_task_init(void)
 {
     _hoover_start = xEventGroupCreate();
+
+    _hoover_contexts = xSemaphoreCreateCounting(CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN,
+                                                CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN);
+
+    for (size_t i = 0; i < CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN; i++) {
+        gattc_profile_inst_clear(&active_conns[i]);
+        active_conns[i].active_dev = NULL;
+    }
 
     int ret = xTaskCreate(_hoover_task_thread,
                           HOOVER_TASK_NAME,
@@ -554,8 +554,6 @@ void ble_scanning_setup(void)
 {
     esp_err_t ret = ESP_OK;
 
-    esp_power_level_t power_level;
-
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
@@ -643,12 +641,6 @@ void app_main(void)
     control_gpio_setup();
 
     //setup_power_management();
-
-    nr_active = 3;
-    for (size_t i = 0; i < CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN; i++) {
-        gattc_profile_inst_clear(&active_conns[i]);
-        active_conns[i].active_dev = NULL;
-    }
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
