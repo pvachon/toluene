@@ -314,6 +314,11 @@ int device_on_disconnect(struct device *dev, unsigned reason)
 {
     int ret = 1;
 
+    if (NULL == dev) {
+        ESP_LOGE(TAG, "Device reference is NULL, aborting.");
+        abort();
+    }
+
     dev->state = DEVICE_NOT_CONNECTED;
     dev->interrogated = true;
 
