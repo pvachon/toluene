@@ -260,6 +260,7 @@ void _control_task_thread(void *p)
             ESP_LOGI(TAG, "====> STATUS: Wifi is up");
             if (nr_backoffs != 0) {
                 ESP_LOGI(TAG, "Successfully connected after %zu backoffs", nr_backoffs);
+                _clear_indicator_led();
             }
             nr_backoffs = 0;
             /* If we're waiting for NTP, don't adjust our state */
@@ -292,29 +293,33 @@ void _control_task_thread(void *p)
                     start_scan();
                 }
             } else {
-                ESP_LOGI(TAG, "===> STATUS: Wifi is now down, but something is awry (state = %d)", _control_state);
+                ESP_LOGE(TAG, "===> STATUS: Wifi is now down, but something is awry (state = %d)", _control_state);
+                start_scan();
             }
         };
 
         if (bits & CONTROL_TASK_STATUS_WIFI_FAILURE) {
-            ESP_LOGE(TAG, "====> STATUS: Wifi connectivity failure");
-            _set_indicator_led();
-            uploader_shutdown();
-            size_t mem_used = device_tracker_nr_bytes_used(NULL);
+            if (_control_state == CONTROL_STATE_WIFI_BACKOFF) {
+                /* We're in backoff, and not status bit was specified -- initiate connection */
+                ESP_LOGE(TAG, "Continuing to back off (%u), we can't get to wifi for some reason", nr_backoffs);
+                nr_backoffs++;
+                uploader_connect();
+            } else {
+                ESP_LOGE(TAG, "====> STATUS: Wifi connectivity failure");
+                _set_indicator_led();
+                uploader_shutdown();
+                size_t mem_used = device_tracker_nr_bytes_used(NULL);
 
-            _control_state = CONTROL_STATE_WIFI_BACKOFF;
+                _control_state = CONTROL_STATE_WIFI_BACKOFF;
 
-            if (mem_used < CONFIG_TRACKER_MAX_MEM) {
-                /* Just start BLE scanning again */
-                ESP_LOGI(TAG, "====> Resuming BLE scan to give the pipes time to clear");
-                _control_state = CONTROL_STATE_RUNNING_BLE_SCAN;
-                esp_timer_start_once(_control_timer, CONFIG_CONTROL_TIMER_INTERVAL);
-                start_scan();
+                if (mem_used < CONFIG_TRACKER_MAX_MEM) {
+                    /* Just start BLE scanning again */
+                    ESP_LOGI(TAG, "====> Resuming BLE scan to give the pipes time to clear");
+                    _control_state = CONTROL_STATE_RUNNING_BLE_SCAN;
+                    esp_timer_start_once(_control_timer, CONFIG_CONTROL_TIMER_INTERVAL);
+                    start_scan();
+                }
             }
-        } else if (_control_state == CONTROL_STATE_WIFI_BACKOFF) {
-            /* We're in backoff, and not status bit was specified -- initiate connection */
-            nr_backoffs++;
-            uploader_connect();
         }
 
         if (bits & CONTROL_TASK_STATUS_NTP_ACQUIRED) {
