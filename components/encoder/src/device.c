@@ -117,7 +117,9 @@ int _device_prepare_hoover_service_attribs(struct device *dev, esp_gatt_if_t gat
 {
     int ret = -1;
 
-    uint16_t count = 0;
+    uint16_t count = 0,
+             orig_count = 0;
+    int esp_err = 0;
 
     if (NULL != dev->chars) {
         free(dev->chars);
@@ -131,27 +133,25 @@ int _device_prepare_hoover_service_attribs(struct device *dev, esp_gatt_if_t gat
                 ESP_GATT_DB_CHARACTERISTIC, start_hdl, end_hdl, INVALID_HANDLE, &count))
     {
         ESP_LOGE(TAG, "Failed to get service attribute count, aborting");
-        ret = 0;
         goto done;
     }
 
     if (0 == count) {
         ESP_LOGE(TAG, "There were no characteristics for this service, aborting");
-        ret = 0;
         goto done;
     }
 
     if (NULL == (dev->chars = malloc(count * sizeof(*dev->chars)))) {
         ESP_LOGE(TAG, "Failed to allocate memory for %u attributes", (unsigned)count);
-        ret = 0;
         goto done;
     }
 
     dev->nr_chars = count;
 
-    if (ESP_GATT_OK != esp_ble_gattc_get_all_char(gattc_if, conn_id, start_hdl, end_hdl, dev->chars, &count, 0)) {
-        ESP_LOGE(TAG, "Failed to get characteristics for this service, aborting.");
-        ret = 0;
+    orig_count = count;
+
+    if (ESP_GATT_OK != (esp_err = esp_ble_gattc_get_all_char(gattc_if, conn_id, start_hdl, end_hdl, dev->chars, &count, 0))) {
+        ESP_LOGE(TAG, "Failed to get characteristics for this service, aborting (reason = %d, expected %u chars, if=%u).", esp_err, orig_count, gattc_if);
         goto done;
     }
 

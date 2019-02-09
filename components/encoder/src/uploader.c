@@ -69,7 +69,8 @@ xTaskHandle _uploader_task_hdl;
 struct connect_hello {
     uint16_t magic;
     uint16_t nr_records;
-    uint16_t device_id;
+    uint32_t device_id;
+    uint32_t started_at;
 } __attribute__((packed));
 
 static
@@ -344,8 +345,11 @@ int _uploader_deliver_device_info(mbedtls_ssl_context *ssl)
     struct connect_hello helo = {
         .magic = 0xDEAD,
         .nr_records = nr_records,
-        .device_id = 24601,
+        .device_id = 0,
+        .started_at = 0,
     };
+
+    control_get_config_device_info(NULL, NULL, &helo.device_id);
 
     if (NULL == ssl) {
         ESP_LOGE(TAG, "Programmer error: SSL == NULL");
