@@ -42,11 +42,6 @@ struct gattc_profile_inst {
     bool busy;
 };
 
-#if 0
-struct device *active_dev = NULL;
-esp_gatt_if_t active_gattc_if = ESP_GATT_IF_NONE;
-#endif
-
 /**
  * Semaphore for managing hoover contexts available
  */
@@ -143,7 +138,7 @@ struct device_pending_scan {
 };
 
 #define CONFIG_BLE_NUM_PENDING_DEVICES              32 /* Size of the pending ring */
-#define CONFIG_BLE_CANCEL_SCAN_DEVICES              16 /* Cancel the scan when we're "half full" due to potential late arrivals */
+#define CONFIG_BLE_CANCEL_SCAN_DEVICES              8 /* Cancel the scan when we're "half full" due to potential late arrivals */
 #define BLE_PENDING_DEVICES_MASK                    (CONFIG_BLE_NUM_PENDING_DEVICES - 1)
 
 static
@@ -421,6 +416,7 @@ void _hoover_task_thread(void *p)
 
                 size_t nr_wait_iters = 0;
                 do {
+                    ESP_LOGI(TAG, "Waiting for the physical connection interface to be ready");
                     if (pdTRUE == xSemaphoreTake(_hoover_ready, ticks_to_wait)) {
                         break;
                     }
@@ -437,37 +433,50 @@ void _hoover_task_thread(void *p)
 
                 /* Signal to open the GATT server and let the GATT client state machine take over */
                 if (ESP_OK != esp_ble_gattc_open(profile->gattc_if, bda, type, true)) {
-                    ESP_LOGE(TAG, "Fatal error while trying to initiate connection, marking as failed");
+                    ESP_LOGE(HOOVER_TAG, "Fatal error while trying to initiate connection, marking as failed");
 
                     if (device_on_disconnect(dev, 0)) {
-                        ESP_LOGE(TAG, "FATAL: Could not finalize device state, aborting.");
+                        ESP_LOGE(HOOVER_TAG, "FATAL: Could not finalize device state, aborting.");
                         abort();
                     }
 
                     gattc_profile_free(profile);
                 }
+
+                ESP_LOGI(HOOVER_TAG, "Open complete on if %d", profile->gattc_if);
             }
 
             ESP_LOGI(HOOVER_TAG, "All done, waiting for outstanding scans to finish");
 
-            UBaseType_t sem_count = uxSemaphoreGetCount(_hoover_contexts);
-            size_t nr_iters = 0;
-            while (sem_count != CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN && nr_iters < 30) {
+            /* Wait until all contexts are idle, so we can continue onwards */
+            size_t nr_iters = 0,
+                   nr_taken = 0;
+            while (nr_taken != CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN && nr_iters < 30) {
+                ESP_LOGI(HOOVER_TAG, "Waiting for all queue resources to be released... (have %zu/%u)", nr_taken, CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN);
                 if (pdTRUE == xSemaphoreTake(_hoover_contexts, ticks_to_wait)) {
-                    /* Give it back .. not efficient, alas */
-                    xSemaphoreGive(_hoover_contexts);
+                    nr_taken++;
                 } else {
-                    ESP_LOGE(TAG, "We are missing some semaphores (last count free = %u)", sem_count);
                     nr_iters++;
                 }
-
-                sem_count = uxSemaphoreGetCount(_hoover_contexts);
             }
 
             if (nr_iters == 30) {
-                ESP_LOGE(TAG, "Fatal error, timed out while waiting for resources to free, aborting.");
+                ESP_LOGE(HOOVER_TAG, "Fatal error, timed out while waiting for resources to free, aborting.");
                 abort();
             }
+
+            /* Return all the contexts to the free pool */
+            ESP_LOGI(HOOVER_TAG, "Releasing all the contexts for the next victim");
+            for (size_t i = 0; i < nr_taken; i++) {
+                xSemaphoreGive(_hoover_contexts);
+            }
+
+            if (uxSemaphoreGetCount(_hoover_contexts) != CONFIG_BTDM_CONTROLLER_BLE_MAX_CONN) {
+                ESP_LOGI(HOOVER_TAG, "FATAL: did not return all resources back to the context pool.");
+                abort();
+            }
+
+            ESP_LOGI(HOOVER_TAG, "Signaling we have finished hoovering");
 
             control_task_signal_ble_hoover_finished();
         } else {
