@@ -71,7 +71,7 @@ def reset_device(ser):
     time.sleep(0.1)
     ser.setRTS(False)
 
-def generate_identity_certificate(csr_pem, ca_signing_key, ca_certificates, valid_days):
+def generate_identity_certificate(csr_pem, ca_signing_key, ca_certificates, valid_days, device_id):
     # Load the CSR
     csr = load_pem_x509_csr(csr_pem, default_backend())
 
@@ -82,7 +82,9 @@ def generate_identity_certificate(csr_pem, ca_signing_key, ca_certificates, vali
 
     # Generate a certificate from the CSR using the X.509 Certificate Builder
     cert = x509.CertificateBuilder().subject_name(
-            csr.subject
+            x509.Name([
+                x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, u'{}'.format(device_id))
+            ])
         ).issuer_name(
             signing_cert.subject
         ).public_key(
@@ -188,7 +190,7 @@ def main():
     csr = uart_read_csr(ser)
     logging.debug('Got csr  {}'.format(csr))
 
-    ident_certs = generate_identity_certificate(csr, ca_signing_key, ca_certificates, args.valid_length)
+    ident_certs = generate_identity_certificate(csr, ca_signing_key, ca_certificates, args.valid_length, args.device_id)
 
     identity = {
         'wifiESSID' : args.essid,
