@@ -48,8 +48,14 @@ struct ble_service_attribute {
     /** If this attribute has a long UUID, we'll use this memory to represent it */
     uint8_t uuid_long[ESP_UUID_LEN_128];
 
+    /** The handle for this service **/
+    uint16_t handle;
+
+    /** Whether or not this handle is readable */
+    bool is_read;
+
     /** The raw data read back from the service */
-    uint8_t data[];
+    uint8_t *data;
 };
 
 static
@@ -305,19 +311,12 @@ done:
     return ret;
 }
 
-int ble_service_add_attribute(struct ble_service *svc, esp_bt_uuid_t const *uuid, void const *data, size_t data_len)
+int ble_service_add_attribute(struct ble_service *svc, esp_bt_uuid_t const *uuid, uint16_t handle, bool is_read)
 {
     int ret = -1;
 
     struct ble_service_attribute *attr = NULL;
-    size_t real_data_len = data_len;
-
-    if (data_len > 128) {
-        real_data_len = 128;
-        ESP_LOGE(TAG, "Attribute data is too large; we won't be encoding it all, alas");
-    }
-
-    if (NULL == (attr = proto_malloc(sizeof(struct ble_service_attribute) + real_data_len))) {
+    if (NULL == (attr = proto_malloc(sizeof(struct ble_service_attribute)))) {
         ESP_LOGE(TAG, "Out of memory, could not allocate attribute container");
         goto done;
     }
@@ -328,16 +327,18 @@ int ble_service_add_attribute(struct ble_service *svc, esp_bt_uuid_t const *uuid
     _ble_obj_encode_uuid(uuid, attr->uuid_long, &attr->uuid);
     attr->attr.attr_uuid = &attr->uuid;
 
-    if (0 != data_len) {
-        /* Feed me data (or a dead cat) */
-        memcpy(attr->data, data, real_data_len);
-        attr->attr.has_data = 1;
-        attr->attr.data.data = attr->data;
-        attr->attr.data.len = data_len;
-    } else {
-        attr->attr.has_data = 0;
-        attr->attr.data.len = 0;
+    /* Grab the handle for future use */
+    attr->handle = handle;
+    attr->is_read = is_read;
+
+    if (attr->is_read) {
+        ESP_LOGI(TAG, "Attribute %u is to be read", attr->handle);
     }
+
+    /* Set data to default state */
+    attr->attr.has_data = 0;
+    attr->attr.data.len = 0;
+    attr->data = NULL;
 
     /* Track the attribute for when serialization happens */
     svc->nr_attribs++;
@@ -362,6 +363,99 @@ done:
     return ret;
 }
 
+int ble_service_get_attribute(struct ble_service *svc, size_t attrib_id, uint16_t *phandle, bool *pis_read)
+{
+    int ret = -1;
+
+    struct ble_service_attribute *attr = NULL;
+
+    if (NULL == svc || NULL == phandle) {
+        goto done;
+    }
+
+    if (attrib_id >= svc->nr_attribs) {
+        ESP_LOGE(TAG, "Fatal error: requested attribute %zu, but there are only %zu attributes available", attrib_id, svc->nr_attribs);
+        goto done;
+    }
+
+    /* Grab the requested service by ID */
+    BleDevice__BleGattService__BleGattAttr *rattr = svc->attr_ptrs[attrib_id];
+    attr = BL_CONTAINER_OF(rattr, struct ble_service_attribute, attr);
+
+    /* Return critical fields */
+    *phandle = attr->handle;
+
+    if (NULL != pis_read) {
+        ESP_LOGD(TAG, "Retrieve Handle %u, ptr=%p", attr->handle, attr);
+        *pis_read = attr->is_read;
+    }
+
+    ret = 0;
+done:
+    return ret;
+}
+
+int ble_service_get_nr_attributes(struct ble_service *svc, size_t *pnr_attribs)
+{
+    int ret = -1;
+
+    if (NULL == svc || NULL == pnr_attribs) {
+        goto done;
+    }
+
+    *pnr_attribs = svc->nr_attribs;
+
+    ret = 0;
+done:
+    return ret;
+}
+
+int ble_service_set_attribute_data(struct ble_service *svc, size_t attrib_id, void const* data, size_t data_len)
+{
+    int ret = -1;
+
+    size_t real_data_len = data_len;
+
+    struct ble_service_attribute *attr = NULL;
+
+    if (NULL == svc) {
+        goto done;
+    }
+
+    if (data_len > 128) {
+        real_data_len = 128;
+        ESP_LOGE(TAG, "Attribute data is too large; we won't be encoding it all, alas");
+    }
+
+    if (attrib_id >= svc->nr_attribs) {
+        ESP_LOGE(TAG, "Requested attribute out of range");
+        goto done;
+    }
+
+    attr = BL_CONTAINER_OF(svc->attr_ptrs[attrib_id], struct ble_service_attribute, attr);
+
+    if (0 != real_data_len) {
+        if (NULL ==  (attr->data = malloc(real_data_len))) {
+            ESP_LOGE(TAG, "Out of memory to allocate %zu bytes for the received data.", real_data_len);
+            goto done;
+        }
+
+        /* Feed me data (or a dead cat) */
+        memcpy(attr->data, data, real_data_len);
+        attr->attr.has_data = 1;
+        attr->attr.data.data = attr->data;
+        attr->attr.data.len = data_len;
+    } else {
+        attr->data = NULL;
+        attr->attr.has_data = 0;
+        attr->attr.data.len = 0;
+    }
+
+    ret = 0;
+done:
+    return ret;
+}
+
 void ble_object_delete(struct ble_object **pobj)
 {
     struct ble_object *obj = NULL;
@@ -379,6 +473,10 @@ void ble_object_delete(struct ble_object **pobj)
 
         for (size_t i = 0; i < svc->nr_attribs; i++) {
             struct ble_service_attribute *attr = BL_CONTAINER_OF(svc->attr_ptrs[i], struct ble_service_attribute, attr);
+            if (NULL != attr->data) {
+                proto_free(attr->data);
+                attr->data = NULL;
+            }
             proto_free(attr);
             svc->attr_ptrs[i] = NULL;
         }

@@ -17,7 +17,10 @@ int ble_object_get_service_count(struct ble_object *obj, size_t *pcnt);
 int ble_object_get_service_info(struct ble_object *obj, size_t svc_id, uint16_t *pstart_hdl, uint16_t *pend_hdl);
 int ble_object_get_service(struct ble_object *obj, size_t svc_id, struct ble_service **psvc);
 
-int ble_service_add_attribute(struct ble_service *svc, esp_bt_uuid_t const *uuid, void const *data, size_t data_len);
+int ble_service_add_attribute(struct ble_service *svc, esp_bt_uuid_t const *uuid, uint16_t handle, bool is_read);
+int ble_service_get_attribute(struct ble_service *svc, size_t attrib_id, uint16_t *phandle, bool *pis_read);
+int ble_service_get_nr_attributes(struct ble_service *svc, size_t *pnr_attribs);
+int ble_service_set_attribute_data(struct ble_service *svc, size_t attrib_id, void const* data, size_t data_len);
 
 int ble_object_serialize(struct ble_object *obj, uint8_t **pserialized, size_t *pserialized_len, bool interrogated);
 

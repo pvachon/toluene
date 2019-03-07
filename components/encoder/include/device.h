@@ -33,7 +33,6 @@ struct device {
     struct ble_object *obj;
     uint8_t *encoded_obj;
     size_t encoded_obj_len;
-    esp_gattc_char_elem_t *chars;
     size_t nr_chars;
     size_t cur_char;
     size_t cur_svc;

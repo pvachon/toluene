@@ -267,6 +267,7 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
 
     case ESP_GATTC_OPEN_EVT: {
         ESP_LOGI(TAG, "ESP_GATTC_OPEN_EVT (gattc_if = %d)", gattc_if);
+
         if (pdFALSE == xSemaphoreGive(_hoover_ready)) {
             ESP_LOGE(TAG, "Failed to notify we are ready for GATT-ness, aborting.");
             abort();
@@ -327,6 +328,7 @@ void hoover_gatt_client_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t 
                 ESP_LOGW(TAG, "Failure while scheduling close for gattc_if=%d, conn_id=%u", gattc_if, p_data->search_cmpl.conn_id);
             }
         }
+
         break;
 
     case ESP_GATTC_READ_CHAR_EVT:
